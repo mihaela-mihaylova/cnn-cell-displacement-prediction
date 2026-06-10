@@ -1,0 +1,27 @@
+# ─── Paths ────────────────────────────────────────────────────────────────────
+train_images: "../tracking_models/patches_train/input/"
+train_masks:  "../tracking_models/patches_train/output/"
+output_dir:   "."          # where models, loss plots, and logs are saved
+
+# ─── Data ─────────────────────────────────────────────────────────────────────
+random_seed:  43
+perc_data:    0.35         # fraction of available patches to use
+test_prop:    0.1          # fraction of selected patches held out for validation
+
+# ─── Patch / image dimensions ─────────────────────────────────────────────────
+img_channels: 3
+patch_size:   128          # patches are square; only one value needed
+
+# ─── Training ─────────────────────────────────────────────────────────────────
+batch_size:   4
+num_epochs:   200
+lr:           0.0001
+weight_decay: 0.0001       # L2 regularisation passed to Adam
+lambda_l1:    0.1          # L1 regularisation weight on Conv2d parameters
+
+# ─── Early stopping ───────────────────────────────────────────────────────────
+patience:     100
+
+# ─── Checkpoint snapshots ─────────────────────────────────────────────────────
+snapshot_start_epoch: 40   # start saving every-N-epoch snapshots after this epoch
+snapshot_interval:    10   # save a snapshot every N epochs
