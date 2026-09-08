@@ -16,8 +16,6 @@ Usage:
         --output_dir     /path/to/output \\
         --img_height     1104 \\
         --img_width      1376 \\
-        --first_frame_id 4134 \\
-        --coeff          1.0
 
 Arguments:
     --csv            Path to tracking CSV.
@@ -26,14 +24,6 @@ Arguments:
                      and displ_masks/displ_y/ will be created.
     --img_height     Height of the training images in pixels (default: 1104).
     --img_width      Width of the training images in pixels (default: 1376).
-    --first_frame_id Numerical ID of the first frame, used for output filenames.
-                     e.g. if your frames are named 4134.jpg, 4135.jpg ...
-                     pass --first_frame_id 4134  (default: 0)
-    --coeff          Coordinate scaling coefficient.
-                     1.0 = coordinates already match img_height/img_width.
-                     0.5 = CSV was extracted from images twice as large
-                           (e.g. 2208x2752) but you train on half-resolution
-                           (1104x1376). (default: 1.0)
 """
 
 import argparse
@@ -43,22 +33,17 @@ import numpy as np
 import pandas as pd
 from skimage.draw import disk
 from skimage.io import imsave
+from merge_csv import get_prefix_number
 
-
-def generate_masks(csv_path, output_dir, img_height, img_width, first_frame_id, coeff):
-
-    # ── Load tracking data ────────────────────────────────────────────────────
-    df = pd.read_csv(csv_path)
-    df.columns = ["tframe", "y", "x", "track", "displ_y", "displ_x"]
+def generate_masks(df, output_dir, img_height, img_width, first_frame_id=0):
 
     # Sanity check: do coordinates fit inside the image after scaling?
-    max_x = max(df["x"].values) * coeff
-    max_y = max(df["y"].values) * coeff
+    max_x = max(df["x"].values)
+    max_y = max(df["y"].values)
     if max_x >= img_width or max_y >= img_height:
         print(
             f"Warning: some coordinates exceed image dimensions after applying "
-            f"coeff={coeff}. Max scaled x={max_x:.1f}, max scaled y={max_y:.1f}. "
-            f"Check that --coeff and --img_height/--img_width are correct."
+            f"Check that --img_height/--img_width are correct."
         )
 
     # ── Create output directories ─────────────────────────────────────────────
@@ -79,8 +64,8 @@ def generate_masks(csv_path, output_dir, img_height, img_width, first_frame_id, 
         for _, row in df[df["tframe"] == i].iterrows():
             displ_x  = row["displ_x"]
             displ_y  = row["displ_y"]
-            centre_y = round(row["y"] * coeff)
-            centre_x = round(row["x"] * coeff)
+            centre_y = round(row["y"])
+            centre_x = round(row["x"])
 
             rr, cc = disk((centre_y, centre_x), radius=10)
 
@@ -113,29 +98,38 @@ def main():
     parser = argparse.ArgumentParser(
         description="Convert a tracking CSV into position and displacement image masks."
     )
-    parser.add_argument("--csv",            required=True,
+    parser.add_argument("--path_to_csv", required=True,
                         help="Path to tracking CSV file.")
-    parser.add_argument("--output_dir",     required=True,
+    parser.add_argument("--output_dir", required=True,
                         help="Root folder for output masks.")
-    parser.add_argument("--img_height",     type=int,   default=1104,
+    parser.add_argument("--img_height", type=int, default=1104,
                         help="Image height in pixels (default: 1104).")
-    parser.add_argument("--img_width",      type=int,   default=1376,
+    parser.add_argument("--img_width", type=int, default=1376,
                         help="Image width in pixels (default: 1376).")
-    parser.add_argument("--first_frame_id", type=int,   default=0,
-                        help="Numerical ID of the first frame (default: 0).")
-    parser.add_argument("--coeff",          type=float, default=1.0,
-                        help="Coordinate scaling coefficient (default: 1.0). "
-                             "Use 0.5 if CSV was extracted from images twice as large.")
+
     args = parser.parse_args()
 
-    generate_masks(
-        csv_path       = args.csv,
-        output_dir     = args.output_dir,
-        img_height     = args.img_height,
-        img_width      = args.img_width,
-        first_frame_id = args.first_frame_id,
-        coeff          = args.coeff,
-    )
+    path_to_csv = args.path_to_csv
+    output_dir = args.output_dir
+    img_height = args.img_height
+    img_width = args.img_width
+
+    df = pd.read_csv(path_to_csv)
+    files_list = sorted(df['video_id'].unique(), key=get_prefix_number)
+    print(files_list)
+    init_frame_id_video = 0
+
+    for f in files_list:
+        temp = df[df['video_id'] == f]
+        temp = temp.sort_values(by=['track_no', 'tframe'], ignore_index=True)    
+
+        generate_masks(temp, output_dir,
+                       img_height=img_height,
+                       img_width=img_width,
+                       first_frame_id=init_frame_id_video)
+
+        # allocate the smallest frame id for that video
+        init_frame_id_video = init_frame_id_video + len(temp['tframe'].unique())
 
 
 if __name__ == "__main__":
