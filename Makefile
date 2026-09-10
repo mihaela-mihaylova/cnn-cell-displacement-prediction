@@ -1,28 +1,35 @@
 # =============================================================================
-# Cell Displacement Prediction Pipeline
+# Cell Displacement Prediction — Data Preparation Pipeline
 # =============================================================================
 # Usage:
-#   make prepare_data   — run all data-preparation steps for SPLIT, in order
-#   make train          — train the model on SPLIT's patches
-#   make predict        — run first/second split + inference on PREDICT_SPLIT
-#   make all            — prepare data + train
-#   make clean          — remove generated (derived) data for SPLIT/PREDICT_SPLIT
+#   make prepare_data              — run all data-preparation steps for SPLIT (default: train)
+#   make prepare_data SPLIT=val    — ...for a specific split instead
+#   make prepare_data_all          — run all data-preparation steps for every split in ALL_SPLITS
+#   make clean                     — remove generated (derived) data for SPLIT
+#   make clean_all                 — remove generated (derived) data for every split in ALL_SPLITS
 #
-# Data layout expected under data/ (already scaffolded in this repo):
-#   data/csv/raw_csv_files/<split>/*.csv        — one CSV per tracked video (you provide)
-#   data/csv/csv_per_split/<split>.csv          — merged CSV (generated)
-#   data/frames/raw_frames/<split>/*.jpg        — raw video frames, numbered 0.jpg, 1.jpg, ...
-#                                                  matching the video order in the merged CSV
-#                                                  (you provide)
-#   data/frames/first_second/<split>/{first,second}/   — consecutive frame pairs (generated)
-#   data/frames/model_data/output/<split>/             — position + displacement masks (generated)
-#   data/frames/padded_frames/<split>/                 — padded images + masks (generated)
-#   data/frames/model_data/patches/<split>/            — training patches (generated)
+# Data layout expected under data/ (raw/ is scaffolded already; you provide the
+# actual files):
+#   data/raw/raw_csv_files/<split>/*.csv          — one CSV per tracked video
+#   data/raw/raw_frames/<split>/<video>/*.jpg     — one subfolder per video, each
+#                                                    locally numbered 0.jpg, 1.jpg, ...
+#                                                    Subfolder names must share the
+#                                                    same leading "<n>_" prefix as the
+#                                                    matching CSV (e.g. "1_...") so
+#                                                    videos line up across steps.
 #
-# SPLIT drives the labelled pipeline (merge_csv → generate_masks → first_second →
-# pad_images → split_patches → train); it needs a raw_csv_files/<split> folder with
-# CSVs. PREDICT_SPLIT drives inference only (first_second → predict) and needs no CSV
-# — just raw frames in data/frames/raw_frames/<PREDICT_SPLIT>/.
+# Generated under data/intermediate/<split>/ (steps 1-4) — everything for one split
+# lives under its own folder, so it's easy to trace back:
+#   data/intermediate/<split>/<split>.csv                  — merged CSV (step 1)
+#   data/intermediate/<split>/masks/                       — position + displacement
+#                                                             masks (step 2)
+#   data/intermediate/<split>/first_second/{first,second}/ — consecutive frame pairs,
+#                                                             globally numbered (step 3)
+#   data/intermediate/<split>/padded/                      — padded frames + masks (step 4)
+#
+# Generated under data/model_data/ (step 5) — the final patches fed into the model:
+#   data/model_data/<split>/input/{first,second}/                            — image patches
+#   data/model_data/<split>/output/{pos_masks,displ_masks/{displ_x,displ_y}}/ — mask patches
 #
 # Configure the variables below (or override on the command line, e.g.
 # `make prepare_data SPLIT=val`) before running.
@@ -33,54 +40,43 @@ PYTHON ?= python3
 # ─── Split selection ──────────────────────────────────────────────────────────
 # NOTE: keep these assignments free of trailing inline comments — GNU Make bakes
 # any whitespace before a same-line "#" into the variable's value.
-SPLIT         ?= train
-PREDICT_SPLIT ?= test
+SPLIT      ?= train
+ALL_SPLITS ?= train val test
 
-# ─── Paths (derived from SPLIT / PREDICT_SPLIT) ───────────────────────────────
-RAW_CSV_DIR       := data/csv/raw_csv_files/$(SPLIT)
-SPLIT_CSV         := data/csv/csv_per_split/$(SPLIT).csv
+# ─── Paths (derived from SPLIT) ────────────────────────────────────────────────
+RAW_CSV_DIR    := data/raw/raw_csv_files/$(SPLIT)
+RAW_FRAMES_DIR := data/raw/raw_frames/$(SPLIT)
 
-RAW_FRAMES_DIR         := data/frames/raw_frames/$(SPLIT)
-FIRST_SECOND_DIR       := data/frames/first_second/$(SPLIT)
-# generate_tracking_output.py appends a subfolder named after the CSV (i.e. SPLIT)
-# onto whatever --output_dir it's given, so MASKS_PARENT_DIR is what gets passed in.
-MASKS_PARENT_DIR       := data/frames/model_data/output
-MASKS_DIR              := $(MASKS_PARENT_DIR)/$(SPLIT)
-PADDED_DIR             := data/frames/padded_frames/$(SPLIT)
-PATCHES_DIR            := data/frames/model_data/patches/$(SPLIT)
-
-PREDICT_RAW_FRAMES_DIR   := data/frames/raw_frames/$(PREDICT_SPLIT)
-PREDICT_FIRST_SECOND_DIR := data/frames/first_second/$(PREDICT_SPLIT)
-PREDICT_OUTPUT_DIR       ?= data/predictions
+SPLIT_DIR         := data/intermediate/$(SPLIT)
+SPLIT_CSV         := $(SPLIT_DIR)/$(SPLIT).csv
+FIRST_SECOND_DIR  := $(SPLIT_DIR)/first_second
+MASKS_DIR         := $(SPLIT_DIR)/masks
+PADDED_DIR        := $(SPLIT_DIR)/padded
+# split_images_to_patches.py appends input/ and output/ subfolders itself.
+PATCHES_DIR       := data/model_data/$(SPLIT)
 
 # ─── Image / patch parameters ─────────────────────────────────────────────────
-IMG_HEIGHT        := 1104
-IMG_WIDTH         := 1376
-IMG_CHANNELS      := 3
-PATCH_SIZE        := 128
-IMG_FORMAT        := jpg
-
-# ─── Training config ──────────────────────────────────────────────────────────
-CONFIG            := config.yaml
-
-# ─── Prediction config ─────────────────────────────────────────────────────────
-# train.py saves the best checkpoint as displ_xy_segm_best_model_<run_name>.pt in
-# its config output_dir ("." by default). Auto-pick the most recently trained one
-# so `make predict` works without typing the path — override it explicitly once
-# you know which run you want, e.g. make predict MODEL_PATH=path/to/best_model.pt
-MODEL_PATH        ?= $(shell ls -t displ_xy_segm_best_model_*.pt 2>/dev/null | head -n 1)
+IMG_HEIGHT   := 1104
+IMG_WIDTH    := 1376
+IMG_CHANNELS := 3
+PATCH_SIZE   := 128
+IMG_FORMAT   := jpg
 
 # =============================================================================
 
-.PHONY: all prepare_data merge_csv generate_masks first_second pad_images \
-        split_patches train predict_first_second predict clean help
+.PHONY: prepare_data prepare_data_all merge_csv generate_masks first_second \
+        pad_images split_patches clean clean_all help
 
 help:
-	@echo "Targets: prepare_data, merge_csv, generate_masks, first_second, pad_images,"
-	@echo "         split_patches, train, predict_first_second, predict, all, clean"
-	@echo "Key variables: SPLIT=$(SPLIT) PREDICT_SPLIT=$(PREDICT_SPLIT) MODEL_PATH=$(MODEL_PATH)"
+	@echo "Targets: prepare_data, prepare_data_all, merge_csv, generate_masks, first_second,"
+	@echo "         pad_images, split_patches, clean, clean_all"
+	@echo "Key variables: SPLIT=$(SPLIT) ALL_SPLITS=$(ALL_SPLITS)"
 
-all: prepare_data train
+# ─── Run every step for every split in ALL_SPLITS, one split at a time ────────
+prepare_data_all:
+	@for s in $(ALL_SPLITS); do \
+		$(MAKE) prepare_data SPLIT=$$s ; \
+	done
 
 # ─── Full data preparation (runs steps 1-5 in order, for SPLIT) ───────────────
 prepare_data: merge_csv generate_masks first_second pad_images split_patches
@@ -90,7 +86,7 @@ prepare_data: merge_csv generate_masks first_second pad_images split_patches
 # `make prepare_data SPLIT=val` etc. no-op cleanly on splits you haven't filled in.
 merge_csv:
 	@echo "\n>>> Step 1/5: Merging tracking CSVs for split '$(SPLIT)'..."
-	@mkdir -p $(dir $(SPLIT_CSV))
+	@mkdir -p $(SPLIT_DIR)
 	@if ls $(RAW_CSV_DIR)/*.csv >/dev/null 2>&1; then \
 		$(PYTHON) prepare_data/merge_csv.py $(RAW_CSV_DIR) -o $(SPLIT_CSV) ; \
 	else \
@@ -104,23 +100,22 @@ generate_masks:
 	@if [ -f $(SPLIT_CSV) ]; then \
 		$(PYTHON) prepare_data/generate_tracking_output.py \
 			--path_to_csv $(SPLIT_CSV) \
-			--output_dir  $(MASKS_PARENT_DIR) \
+			--output_dir  $(MASKS_DIR) \
 			--img_height  $(IMG_HEIGHT) \
 			--img_width   $(IMG_WIDTH) ; \
 	else \
 		echo "No merged CSV at $(SPLIT_CSV) — skipping." ; \
 	fi
 
-# ─── Step 3: Raw frames → first/second consecutive-pair folders ───────────────
-# Skips if raw_frames/<SPLIT> has no frames yet.
+# ─── Step 3: Raw per-video frame folders → first/second pair folders ──────────
+# Skips if raw_frames/<SPLIT> has no per-video subfolders yet.
 first_second:
 	@echo "\n>>> Step 3/5: Building first/second frame pairs for '$(SPLIT)'..."
-	@if ls $(RAW_FRAMES_DIR)/*.$(IMG_FORMAT) >/dev/null 2>&1; then \
-		mkdir -p $(FIRST_SECOND_DIR) ; \
-		cp $(RAW_FRAMES_DIR)/*.$(IMG_FORMAT) $(FIRST_SECOND_DIR)/ ; \
-		$(PYTHON) prepare_data/generate_first_second_folder.py $(FIRST_SECOND_DIR) ; \
+	@if find $(RAW_FRAMES_DIR) -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then \
+		$(PYTHON) prepare_data/generate_first_second_folder.py \
+			$(RAW_FRAMES_DIR) $(FIRST_SECOND_DIR) true ; \
 	else \
-		echo "No .$(IMG_FORMAT) frames found in $(RAW_FRAMES_DIR) — skipping." ; \
+		echo "No per-video subfolders found in $(RAW_FRAMES_DIR) — skipping." ; \
 	fi
 
 # ─── Step 4: Pad images and masks ──────────────────────────────────────────────
@@ -174,7 +169,7 @@ pad_images:
 		echo "No first/second frames or masks found for '$(SPLIT)' — skipping padding." ; \
 	fi
 
-# ─── Step 5: Split padded images into patches ─────────────────────────────────
+# ─── Step 5: Split padded images into patches (final model input/output data) ──
 # Skips if Step 4 produced no padded frames for SPLIT.
 split_patches:
 	@echo "\n>>> Step 5/5: Splitting into patches..."
@@ -190,45 +185,12 @@ split_patches:
 		echo "No padded frames found for '$(SPLIT)' — skipping patch splitting." ; \
 	fi
 
-# ─── Train ─────────────────────────────────────────────────────────────────────
-# Uses config.yaml for hyperparameters, but points train/val data at the patches
-# just generated for SPLIT (overriding whatever train_images/train_masks say).
-train:
-	@echo "\n>>> Training model on '$(SPLIT)' patches..."
-	$(PYTHON) train.py --config $(CONFIG) \
-		--train_images $(PATCHES_DIR)/input \
-		--train_masks  $(PATCHES_DIR)/output
-
-# ─── Predict ────────────────────────────────────────────────────────────────────
-# Skips if raw_frames/<PREDICT_SPLIT> has no frames yet.
-predict_first_second:
-	@echo "\n>>> Building first/second frame pairs for '$(PREDICT_SPLIT)'..."
-	@if ls $(PREDICT_RAW_FRAMES_DIR)/*.$(IMG_FORMAT) >/dev/null 2>&1; then \
-		mkdir -p $(PREDICT_FIRST_SECOND_DIR) ; \
-		cp $(PREDICT_RAW_FRAMES_DIR)/*.$(IMG_FORMAT) $(PREDICT_FIRST_SECOND_DIR)/ ; \
-		$(PYTHON) predict/generate_first_second_folder.py $(PREDICT_FIRST_SECOND_DIR) ; \
-	else \
-		echo "No .$(IMG_FORMAT) frames found in $(PREDICT_RAW_FRAMES_DIR) — skipping." ; \
-	fi
-
-predict: predict_first_second
-	@if [ -z "$(MODEL_PATH)" ]; then \
-		echo "No trained model found (no displ_xy_segm_best_model_*.pt here yet)." >&2; \
-		echo "Run 'make train' first, or pass one explicitly: make predict MODEL_PATH=path/to/best_model.pt" >&2; \
-		exit 1; \
-	fi
-	@echo "\n>>> Running prediction on '$(PREDICT_SPLIT)'..."
-	@mkdir -p $(PREDICT_OUTPUT_DIR)
-	$(PYTHON) predict/segment_with_our_nn_and_predict_xy_displ.py \
-		$(PREDICT_FIRST_SECOND_DIR) \
-		$(PREDICT_OUTPUT_DIR) \
-		--model_path $(MODEL_PATH) \
-		--img_height $(IMG_HEIGHT) \
-		--img_width  $(IMG_WIDTH) \
-		--patch_size $(PATCH_SIZE)
-
-# ─── Clean generated data (keeps raw CSVs, raw frames, and model weights) ──────
+# ─── Clean generated data (keeps raw CSVs and raw frames) ─────────────────────
 clean:
-	@echo "Removing generated data for split '$(SPLIT)' and predict split '$(PREDICT_SPLIT)'..."
-	rm -rf $(SPLIT_CSV) $(FIRST_SECOND_DIR) $(MASKS_DIR) $(PADDED_DIR) $(PATCHES_DIR) \
-	       $(PREDICT_FIRST_SECOND_DIR)
+	@echo "Removing generated data for split '$(SPLIT)'..."
+	rm -rf $(SPLIT_DIR) $(PATCHES_DIR)
+
+clean_all:
+	@for s in $(ALL_SPLITS); do \
+		$(MAKE) clean SPLIT=$$s ; \
+	done

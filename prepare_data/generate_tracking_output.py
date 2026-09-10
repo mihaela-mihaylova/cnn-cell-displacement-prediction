@@ -130,8 +130,6 @@ def main():
 
     # extract the name of the file to use in the folder path for all data
     all_tracks_filename = path_to_csv.split('/')[-1].split('.')[0]
-    run_output_dir = os.path.join(output_dir, all_tracks_filename)
-    os.makedirs(run_output_dir, exist_ok=True)
 
     files_list = sorted(df['video_id'].unique(), key=get_prefix_number)
     print(files_list)
@@ -147,7 +145,7 @@ def main():
         temp = df[df['video_id'] == f]
         temp = temp.sort_values(by=['track_no', 'tframe'], ignore_index=True)    
 
-        generate_masks(temp, run_output_dir,
+        generate_masks(temp, output_dir,
                        img_height=img_height,
                        img_width=img_width,
                        first_frame_id=init_frame_id_video,
@@ -177,7 +175,7 @@ def main():
         "for_training": for_training,
         "num_videos": len(files_list),
     }
-    metadata_path = os.path.join(run_output_dir, f"{all_tracks_filename}_metadata.yaml")
+    metadata_path = os.path.join(output_dir, f"{all_tracks_filename}_metadata.yaml")
     with open(metadata_path, "w") as fp:
         yaml.dump(metadata, fp, sort_keys=False, default_flow_style=False)
     print(f"Run metadata saved to {metadata_path}")
@@ -188,7 +186,7 @@ def main():
             for vid, bounds in video_files_metadata.items()
         ]
     )
-    video_ranges_path = os.path.join(run_output_dir, f"{all_tracks_filename}_video_frame_ranges.csv")
+    video_ranges_path = os.path.join(output_dir, f"{all_tracks_filename}_video_frame_ranges.csv")
     video_ranges_df.to_csv(video_ranges_path, index=False)
     print(f"Video frame ranges saved to {video_ranges_path}")
 

@@ -7,6 +7,7 @@ import numpy as np
 from merge_csv import get_prefix_number
 from datetime import datetime
 import json
+from pathlib import Path
 
 'TO RUN: python generate_first_second_folder.py /path/to/input_folder'
 def find_smallest_k(folder):
@@ -20,7 +21,7 @@ def find_smallest_k(folder):
             except ValueError:
                 print(f"Skipping file {file}: Not a valid number.")
                 continue
-    print(f"Extracted numbers: {numbers}")  # Debugging line
+    #print(f"Extracted numbers: {numbers}")  # Debugging line
     return min(numbers) if numbers else None
 
 
@@ -69,10 +70,13 @@ def copy_images_for_training(input_folder, output_folder, start_id):
     # Run image comparison checks
     # smallest_id = start_id, so that only the files generated in this run are checked.
     # Otherwise all files starting from 0 will be checked, even if that's the n-th file and its start id > 0
-    if verify_image_copies(first_folder, second_folder, num_images, format, smallest_id=start_id):
-        print(f"Images successfully copied to '{first_folder}' and '{second_folder}'.")
+    # we pass num_images - 1, because the last frame is skipped
+    check = verify_image_copies(first_folder, second_folder, num_images - 1, format, smallest_id=start_id, for_training=True)
+    if check:
+        #print(f"Images successfully copied to '{first_folder}' and '{second_folder}'.")
+        print('Respective match check is OK.')
     else:
-        ValueError('Check for image matching did not pass. Images in first and second folder are not compatible.')
+        raise ValueError('Check for image matching did not pass. Images in first and second folder are not compatible.')
 
 def copy_images_for_inference(input_folder, output_folder):
 
@@ -99,16 +103,15 @@ def copy_images_for_inference(input_folder, output_folder):
     last_image_dest = os.path.join(second_folder, f"{smallest_id + num_images - 1}.{format}")  # Save as image n in "second"
     shutil.copy(last_image_src, last_image_dest)
 
-    print(f"Images successfully copied to '{first_folder}' and '{second_folder}'.")
-
     # Run image comparison checks
-    if verify_image_copies(first_folder, second_folder, len(image_files), format, smallest_id):
-        print(f"Images successfully copied to '{first_folder}' and '{second_folder}'.")
+    check = verify_image_copies(first_folder, second_folder, len(image_files), format, smallest_id, for_training=False)
+    if check:
+        print('Respective match check is OK.')
+        #print(f"Images successfully copied to '{first_folder}' and '{second_folder}'.")
     else:
         ValueError('Check for image matching did not pass. Images in first and second folder are not compatible.')
 
-
-def verify_image_copies(first_folder, second_folder, num_images, format, smallest_id):
+def verify_image_copies(first_folder, second_folder, num_images, format, smallest_id, for_training=True):
     """
     Function to verify whether images in 'second' are correctly copied and match the expected images in 'first'.
     """
@@ -129,13 +132,14 @@ def verify_image_copies(first_folder, second_folder, num_images, format, smalles
     else:
         check_passed=False
 
-    # Compare n-1.{format} in second with n.jpg in second
-    second_last_image_dest_path = os.path.join(second_folder, f"{smallest_id + num_images - 2}.{format}")
-    second_last_dup_image_path = os.path.join(second_folder, f"{smallest_id + num_images - 1}.{format}")
-    if compare_images(second_last_image_dest_path, second_last_dup_image_path):
-        check_passed=True
-    else:
-        check_passed=False
+    if not for_training:
+        # Compare n-1.{format} in second with n.jpg in second
+        second_last_image_dest_path = os.path.join(second_folder, f"{smallest_id + num_images - 2}.{format}")
+        second_last_dup_image_path = os.path.join(second_folder, f"{smallest_id + num_images - 1}.{format}")
+        if compare_images(second_last_image_dest_path, second_last_dup_image_path):
+            check_passed=True
+        else:
+            check_passed=False
 
     return check_passed
 
@@ -190,6 +194,7 @@ def save_metadata(input_folder, output_folder, subfolders, final_frame_count, me
 def iterate_over_folder_for_training(input_folder, output_folder, debug=True):
     if debug:
         print('For training')
+    input_folder = Path(input_folder)
     has_subdirs = any(item.is_dir() for item in input_folder.iterdir())
 
     if not has_subdirs:
@@ -198,7 +203,7 @@ def iterate_over_folder_for_training(input_folder, output_folder, debug=True):
         # sort subfolders
         subfolders = sorted(
             [f for f in input_folder.iterdir() if f.is_dir()],
-            key=get_prefix_number
+            key=lambda f: get_prefix_number(f.name)
         )
         start_id = 0
         metadata = {}
@@ -206,7 +211,7 @@ def iterate_over_folder_for_training(input_folder, output_folder, debug=True):
 
         for child_folder in subfolders:
             first_id_video = start_id
-            copy_images_for_training(os.path.join(input_folder,child_folder), output_folder=output_folder, start_id=start_id)
+            copy_images_for_training(child_folder, output_folder=output_folder, start_id=start_id)
             num_img_files,_,_,_ = _extract_files_info(child_folder)
             # subtract 1 because the last frame is dropped
             num_frames_used = num_img_files - 1
@@ -264,7 +269,7 @@ def iterate_over_folder_for_inference(input_folder, output_folder, debug=True):
         # sort subfolders
         subfolders = sorted(
             [f for f in input_folder.iterdir() if f.is_dir()],
-            key=get_prefix_number
+            key=lambda f: get_prefix_number(f.name)
         )
         for child_folder in subfolders:
             copy_images_for_inference(child_folder, output_folder)
@@ -282,8 +287,9 @@ def main():
     parser.add_argument('for_training', type=str, help='Declare whether the files in the folder are used for training. If true,last frame in the folder is skipped.')
 
     args = parser.parse_args()
-    input_folder = args.input_folder
-    output_folder = args.output_folder
+    # turn these into paths
+    input_folder = Path(args.input_folder)
+    output_folder = Path(args.output_folder)
     # create if it doesnt exist
     os.makedirs(output_folder,exist_ok=True)
     for_training = args.for_training
