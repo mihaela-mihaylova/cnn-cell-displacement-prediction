@@ -100,7 +100,8 @@ def predict_displacement(test_images,
 
     # ── Load model ────────────────────────────────────────────────────────────
     model = UNet()
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    checkpoint = torch.load(model_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
     print(f"Loaded model from {model_path}")
@@ -179,6 +180,7 @@ def predict_displacement(test_images,
         for c in blobs:
             y       = int(c[0])
             x       = int(c[1])
+            r       = int(c[2])
             displ_x = average_pixel_value(y, x, r, displ_x_image)
             displ_y = average_pixel_value(y, x, r, displ_y_image)
             all_points.append((i, y, x, displ_y, displ_x))
