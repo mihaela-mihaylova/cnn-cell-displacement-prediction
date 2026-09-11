@@ -47,6 +47,10 @@ ALL_SPLITS ?= train val test
 RAW_CSV_DIR    := data/raw/raw_csv_files/$(SPLIT)
 RAW_FRAMES_DIR := data/raw/raw_frames/$(SPLIT)
 
+# Name of the nested subfolder (if any) that flatten_frames moves images out of,
+# e.g. raw_frames/<split>/<video>/frames/*.jpg -> raw_frames/<split>/<video>/*.jpg
+FRAMES_INNER_NAME ?= frames
+
 SPLIT_DIR         := data/intermediate/$(SPLIT)
 SPLIT_CSV         := $(SPLIT_DIR)/$(SPLIT).csv
 FIRST_SECOND_DIR  := $(SPLIT_DIR)/first_second
@@ -64,12 +68,12 @@ IMG_FORMAT   := jpg
 
 # =============================================================================
 
-.PHONY: prepare_data prepare_data_all merge_csv generate_masks first_second \
-        pad_images split_patches clean clean_all help
+.PHONY: prepare_data prepare_data_all merge_csv generate_masks flatten_frames \
+        first_second pad_images split_patches clean clean_all help
 
 help:
-	@echo "Targets: prepare_data, prepare_data_all, merge_csv, generate_masks, first_second,"
-	@echo "         pad_images, split_patches, clean, clean_all"
+	@echo "Targets: prepare_data, prepare_data_all, merge_csv, generate_masks, flatten_frames,"
+	@echo "         first_second, pad_images, split_patches, clean, clean_all"
 	@echo "Key variables: SPLIT=$(SPLIT) ALL_SPLITS=$(ALL_SPLITS)"
 
 # ─── Run every step for every split in ALL_SPLITS, one split at a time ────────
@@ -78,14 +82,14 @@ prepare_data_all:
 		$(MAKE) prepare_data SPLIT=$$s ; \
 	done
 
-# ─── Full data preparation (runs steps 1-5 in order, for SPLIT) ───────────────
-prepare_data: merge_csv generate_masks first_second pad_images split_patches
+# ─── Full data preparation (runs steps 1-6 in order, for SPLIT) ───────────────
+prepare_data: merge_csv generate_masks flatten_frames first_second pad_images split_patches
 
 # ─── Step 1: Combine per-video tracking CSVs into one CSV for SPLIT ───────────
 # Skips (without erroring) if raw_csv_files/<SPLIT> has no CSVs yet — lets
 # `make prepare_data SPLIT=val` etc. no-op cleanly on splits you haven't filled in.
 merge_csv:
-	@echo "\n>>> Step 1/5: Merging tracking CSVs for split '$(SPLIT)'..."
+	@echo "\n>>> Step 1/6: Merging tracking CSVs for split '$(SPLIT)'..."
 	@mkdir -p $(SPLIT_DIR)
 	@if ls $(RAW_CSV_DIR)/*.csv >/dev/null 2>&1; then \
 		$(PYTHON) prepare_data/merge_csv.py $(RAW_CSV_DIR) -o $(SPLIT_CSV) ; \
@@ -96,7 +100,7 @@ merge_csv:
 # ─── Step 2: CSV → position and displacement masks ────────────────────────────
 # Skips if Step 1 produced no merged CSV for SPLIT.
 generate_masks:
-	@echo "\n>>> Step 2/5: Generating position and displacement masks..."
+	@echo "\n>>> Step 2/6: Generating position and displacement masks..."
 	@if [ -f $(SPLIT_CSV) ]; then \
 		$(PYTHON) prepare_data/generate_tracking_output.py \
 			--path_to_csv $(SPLIT_CSV) \
@@ -107,10 +111,22 @@ generate_masks:
 		echo "No merged CSV at $(SPLIT_CSV) — skipping." ; \
 	fi
 
-# ─── Step 3: Raw per-video frame folders → first/second pair folders ──────────
+# ─── Step 3: Flatten nested "frames/" subfolders in raw frame folders ─────────
+# Safe to run even if already flat, or already run once: a video folder with
+# no $(FRAMES_INNER_NAME)/ subfolder is just skipped for that video, not an error.
+flatten_frames:
+	@echo "\n>>> Step 3/6: Flattening nested '$(FRAMES_INNER_NAME)/' folders for '$(SPLIT)'..."
+	@if find $(RAW_FRAMES_DIR) -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then \
+		$(PYTHON) prepare_data/flatten_frames_folders.py \
+			$(RAW_FRAMES_DIR) --inner-name $(FRAMES_INNER_NAME) ; \
+	else \
+		echo "No per-video subfolders found in $(RAW_FRAMES_DIR) — skipping." ; \
+	fi
+
+# ─── Step 4: Raw per-video frame folders → first/second pair folders ──────────
 # Skips if raw_frames/<SPLIT> has no per-video subfolders yet.
 first_second:
-	@echo "\n>>> Step 3/5: Building first/second frame pairs for '$(SPLIT)'..."
+	@echo "\n>>> Step 4/6: Building first/second frame pairs for '$(SPLIT)'..."
 	@if find $(RAW_FRAMES_DIR) -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then \
 		$(PYTHON) prepare_data/generate_first_second_folder.py \
 			$(RAW_FRAMES_DIR) $(FIRST_SECOND_DIR) true ; \
@@ -118,12 +134,12 @@ first_second:
 		echo "No per-video subfolders found in $(RAW_FRAMES_DIR) — skipping." ; \
 	fi
 
-# ─── Step 4: Pad images and masks ──────────────────────────────────────────────
+# ─── Step 5: Pad images and masks ──────────────────────────────────────────────
 # Padding is calculated automatically from img_height, img_width, patch_size.
 # Run once per folder: first/, second/, and all three mask types.
-# Skips if Steps 2-3 haven't produced masks / first-second frames for SPLIT.
+# Skips if earlier steps haven't produced masks / first-second frames for SPLIT.
 pad_images:
-	@echo "\n>>> Step 4/5: Padding images and masks..."
+	@echo "\n>>> Step 5/6: Padding images and masks..."
 	@if [ -d $(FIRST_SECOND_DIR)/first ] && [ -d $(MASKS_DIR)/pos_masks ]; then \
 		$(PYTHON) prepare_data/pad_images.py \
 			--input_dir    $(FIRST_SECOND_DIR)/first \
@@ -169,10 +185,10 @@ pad_images:
 		echo "No first/second frames or masks found for '$(SPLIT)' — skipping padding." ; \
 	fi
 
-# ─── Step 5: Split padded images into patches (final model input/output data) ──
-# Skips if Step 4 produced no padded frames for SPLIT.
+# ─── Step 6: Split padded images into patches (final model input/output data) ──
+# Skips if Step 5 produced no padded frames for SPLIT.
 split_patches:
-	@echo "\n>>> Step 5/5: Splitting into patches..."
+	@echo "\n>>> Step 6/6: Splitting into patches..."
 	@if [ -d $(PADDED_DIR)/padded_first ]; then \
 		$(PYTHON) prepare_data/split_images_to_patches.py \
 			--input_dir    $(PADDED_DIR) \
