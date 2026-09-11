@@ -7,15 +7,18 @@ import torch.nn as nn
 
 
 def l1_regularisation(model: nn.Module) -> torch.Tensor:
-    """Sum of absolute values of all Conv2d weight tensors."""
-    reg = torch.tensor(0.0)
-    for module in model.modules():
-        if isinstance(module, nn.Conv2d):
-            reg = reg + torch.sum(torch.abs(module.weight))
+    """Sum of absolute values of every weight tensor with ndim > 1
+    (Conv/ConvTranspose/Linear-style weight matrices), excluding
+    biases and normalization-layer parameters (which are always 1D)."""
+    reg = torch.tensor(0.0, device=next(model.parameters()).device)
+    for param in model.parameters():
+        if param.dim() > 1:
+            reg = reg + torch.sum(torch.abs(param))
     return reg
 
-
-def combined_loss(outputs: torch.Tensor, targets: torch.Tensor,
-                   model: nn.Module, lambda_l1: float) -> torch.Tensor:
-    """MSE reconstruction loss plus an L1 penalty on convolutional weights."""
-    return nn.functional.mse_loss(outputs, targets) + lambda_l1 * l1_regularisation(model)
+def combined_loss(outputs, targets, model=None, lambda_l1: float = 0.0):
+    """MSE reconstruction loss plus an L1 penalty."""
+    loss = nn.functional.mse_loss(outputs, targets)
+    if lambda_l1 > 0:
+        loss = loss + lambda_l1 * l1_regularisation(model)
+    return loss
