@@ -80,7 +80,6 @@ def predict_displacement(test_images,
     print(f"Image size: {img_height}x{img_width} | Patch size: {patch_size} | "
           f"Padding — top: {padding_height}, right: {padding_width}")
 
-    # ── Locate frames ─────────────────────────────────────────────────────────
     first_frames_path  = os.path.join(test_images, "first")
     second_frames_path = os.path.join(test_images, "second")
 
@@ -98,7 +97,7 @@ def predict_displacement(test_images,
         print(f"No images found in {first_frames_path}")
         return
 
-    # ── Load model ────────────────────────────────────────────────────────────
+    #-------- Load model ------------
     model = UNet()
     checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -106,38 +105,36 @@ def predict_displacement(test_images,
     model.eval()
     print(f"Loaded model from {model_path}")
 
-    # ── Load images ───────────────────────────────────────────────────────────
-    X_test = np.zeros((num_images, img_height, img_width, 2 * IMG_CHANNELS), dtype=np.float32)
+    padded_height = img_height + padding_height
+    padded_width  = img_width + padding_width
+
+    print("Running inference...")
+    all_points = []
+
     for n in range(num_images):
         frame_id = n + smallest_k_first
+        print(f"Processing image {n}")
+
         img      = imread(os.path.join(first_frames_path,  f"{frame_id}.{img_format}"))[:, :, :IMG_CHANNELS]
         next_img = imread(os.path.join(second_frames_path, f"{frame_id}.{img_format}"))[:, :, :IMG_CHANNELS]
-        X_test[n, :, :, :IMG_CHANNELS]  = img      / 255.0
-        X_test[n, :, :, IMG_CHANNELS:]  = next_img / 255.0
 
-    # ── Pad ───────────────────────────────────────────────────────────────────
-    X_test_pad = np.zeros((num_images, img_height + padding_height,
-                           img_width + padding_width, 2 * IMG_CHANNELS))
-    for j in range(num_images):
+        x_frame = np.zeros((img_height, img_width, 2 * IMG_CHANNELS), dtype=np.float32)
+        x_frame[:, :, :IMG_CHANNELS] = img      / 255.0
+        x_frame[:, :, IMG_CHANNELS:] = next_img / 255.0
+
+        padded_image = np.zeros((padded_height, padded_width, 2 * IMG_CHANNELS), dtype=np.float32)
         for c in range(2 * IMG_CHANNELS):
-            X_test_pad[j, :, :, c] = np.pad(
-                X_test[j, :, :, c],
+            padded_image[:, :, c] = np.pad(
+                x_frame[:, :, c],
                 ((padding_height, 0), (0, padding_width)),
                 mode="constant", constant_values=0
             )
 
-    # ── Split into patches and run inference ──────────────────────────────────
-    print("Running inference...")
-    predictions = []
-
-    for j in range(num_images):
-        padded_image = X_test_pad[j]
         patches = []
-
         h = 0
-        while h < img_height + padding_height:
+        while h < padded_height:
             w = 0
-            while w < img_width + padding_width:
+            while w < padded_width:
                 patches.append(padded_image[h:h + patch_size, w:w + patch_size, :])
                 w += patch_size
             h += patch_size
@@ -151,29 +148,22 @@ def predict_displacement(test_images,
 
         patch_preds = patch_preds.permute(0, 2, 3, 1).cpu().numpy().astype("float32")
 
-        # Reassemble patches into full image
-        whole_image = np.zeros((img_height + padding_height,
-                                img_width  + padding_width, 3))
+        whole_image = np.zeros((padded_height, padded_width, 3), dtype=np.float32)
         i = 0
         h = 0
-        while h < img_height + padding_height:
+        while h < padded_height:
             w = 0
-            while w < img_width + padding_width:
+            while w < padded_width:
                 whole_image[h:h + patch_size, w:w + patch_size, :] = patch_preds[i]
                 w += patch_size
                 i += 1
             h += patch_size
 
-        # Crop padding back off
         cropped = whole_image[padding_height:img_height + padding_height, 0:img_width, :]
-        predictions.append(cropped)
 
-    # ── Extract positions and displacements ───────────────────────────────────
-    all_points = []
-    for i, p in enumerate(predictions):
-        segm_image    = p[:, :, 2] / np.amax(p[:, :, 2])
-        displ_x_image = p[:, :, 0]
-        displ_y_image = p[:, :, 1]
+        segm_image    = cropped[:, :, 2] / np.amax(cropped[:, :, 2])
+        displ_x_image = cropped[:, :, 0]
+        displ_y_image = cropped[:, :, 1]
 
         blobs = feature.blob_log(segm_image, threshold=0.3,
                                  min_sigma=4, max_sigma=6, overlap=0.6)
@@ -183,7 +173,7 @@ def predict_displacement(test_images,
             r       = int(c[2])
             displ_x = average_pixel_value(y, x, r, displ_x_image)
             displ_y = average_pixel_value(y, x, r, displ_y_image)
-            all_points.append((i, y, x, displ_y, displ_x))
+            all_points.append((n, y, x, displ_y, displ_x))
 
     df = pd.DataFrame(all_points, columns=["tframe", "y", "x", "displ_y", "displ_x"])
     if smallest_k_first > 0:
@@ -192,7 +182,6 @@ def predict_displacement(test_images,
     output_csv = os.path.join(output_path, f"nn_pred_{os.path.basename(test_images)}.csv")
     df.to_csv(output_csv, index=False)
     print(f"Detections saved to {output_csv}")
-
 
 def main():
     parser = ArgumentParser(description="Run UNet prediction for cell positions and XY displacement.")
