@@ -5,6 +5,7 @@ Usage:
     python train.py                          # uses config.yaml in the same folder
     python train.py --config path/to/config.yaml
     python train.py --config config.yaml --lr 0.001 --batch_size 8   # CLI overrides
+    python train.py --resume output/latest_model_displ_xy_segm_<run_name>.pt
 
 The script reads all hyperparameters from a YAML config file.
 Any value can be overridden from the command line (see --help).
@@ -24,11 +25,12 @@ import yaml
 from matplotlib import pyplot as plt
 from skimage.io import imread
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from unet import UNet
-
+from utils import set_seed, seed_worker
+from dataset import CellDisplDataset, make_dataloader, load_data, split_data
+from loss import combined_loss
 
 # ─── Device ───────────────────────────────────────────────────────────────────
 
@@ -57,7 +59,7 @@ def apply_cli_overrides(cfg: dict, args: argparse.Namespace) -> dict:
         "output_dir":    args.output_dir,
         "random_seed":   args.random_seed,
         "perc_data":     args.perc_data,
-        "test_prop":     args.test_prop,
+        "val_prop":     args.val_prop,
         "batch_size":    args.batch_size,
         "num_epochs":    args.num_epochs,
         "lr":            args.lr,
@@ -71,141 +73,11 @@ def apply_cli_overrides(cfg: dict, args: argparse.Namespace) -> dict:
     return cfg
 
 
-# ─── Data loading ─────────────────────────────────────────────────────────────
-
-def load_data(cfg: dict):
-    """
-    Load patch images and masks, apply train/val split.
-
-    Returns (X_train, X_val, Y_train, Y_val).
-    Each X has shape (N, H, W, 6): first + second image stacked on channels.
-    Each Y has shape (N, H, W, 3): [displ_x, displ_y, position_mask].
-    """
-    train_images = cfg["train_images"]
-    train_masks  = cfg["train_masks"]
-    img_channels = cfg["img_channels"]
-    patch_size   = cfg["patch_size"]
-    perc_data    = cfg["perc_data"]
-    test_prop    = cfg["test_prop"]
-
-    first_folder = os.path.join(train_images, "first")
-    file_count   = len([
-        f for f in os.listdir(first_folder)
-        if os.path.isfile(os.path.join(first_folder, f))
-    ])
-
-    ids = random.sample(range(file_count), round(perc_data * file_count))
-    ids.sort()
-    n   = len(ids)
-
-    print(f"Loading {n} patches from {file_count} available ({perc_data:.0%} selected)...")
-    start = time.time()
-
-    X = np.zeros((n, patch_size, patch_size, 2 * img_channels), dtype=np.float32)
-    Y = np.zeros((n, patch_size, patch_size, 3),                 dtype=np.float32)
-
-    for i, idx in enumerate(ids):
-        img      = imread(os.path.join(train_images, "first",  f"{idx}.jpg"))[:, :, :img_channels]
-        next_img = imread(os.path.join(train_images, "second", f"{idx}.jpg"))[:, :, :img_channels]
-        X[i, :, :, :img_channels]   = img      / 255.0
-        X[i, :, :, img_channels:]   = next_img / 255.0
-
-        x_img = imread(os.path.join(train_masks, "displ_masks", "displ_x", f"{idx}.png"))
-        y_img = imread(os.path.join(train_masks, "displ_masks", "displ_y", f"{idx}.png"))
-        pos   = imread(os.path.join(train_masks, "pos_masks",               f"{idx}.png"))
-
-        # positive channel minus negative channel → signed displacement
-        Y[i, :, :, 0] = np.float32(x_img[:, :, 1]) - np.float32(x_img[:, :, 0])
-        Y[i, :, :, 1] = np.float32(y_img[:, :, 1]) - np.float32(y_img[:, :, 0])
-        # position mask normalised to [0, ~10] range (stored as 0–255 in uint8)
-        Y[i, :, :, 2] = np.float32(pos) / 25.0
-
-    print(f"Loaded {n} patches in {time.time() - start:.1f}s")
-
-    X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=test_prop)
-    return X_train, X_val, Y_train, Y_val
-
-
-def make_loaders(X_train, X_val, Y_train, Y_val, batch_size: int):
-    train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(Y_train))
-    val_ds   = TensorDataset(torch.from_numpy(X_val),   torch.from_numpy(Y_val))
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  drop_last=True)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, drop_last=True)
-    return train_loader, val_loader
-
-
-# ─── Augmentation ─────────────────────────────────────────────────────────────
-
-def data_augmentation(img: torch.Tensor, mask: torch.Tensor):
-    """
-    Apply random flips, brightness jitter, and Gaussian noise.
-
-    img  shape: (6, H, W) – first image on channels 0:3, second on 3:6
-    mask shape: (3, H, W) – [displ_x, displ_y, position]
-
-    Displacement channels are sign-corrected after spatial flips so that
-    the predicted direction stays consistent with the transformed image.
-    """
-    img  = img.clone()
-    mask = mask.clone()
-
-    # Vertical flip
-    if random.random() > 0.5:
-        img[0:3]  = TF.vflip(img[0:3])
-        img[3:6]  = TF.vflip(img[3:6])
-        mask[0]   = TF.vflip(mask[0])
-        mask[1]   = TF.vflip(mask[1])
-        mask[2]   = TF.vflip(mask[2])
-        mask[1]   = torch.mul(mask[1], -1)   # y-displacement flips sign
-
-    # Horizontal flip
-    if random.random() > 0.5:
-        img[0:3]  = TF.hflip(img[0:3])
-        img[3:6]  = TF.hflip(img[3:6])
-        mask[0]   = TF.hflip(mask[0])
-        mask[1]   = TF.hflip(mask[1])
-        mask[2]   = TF.hflip(mask[2])
-        mask[0]   = torch.mul(mask[0], -1)   # x-displacement flips sign
-
-    # Brightness jitter
-    if random.random() > 0.5:
-        brightness = random.uniform(1, 3)
-        img[0:3]   = TF.adjust_brightness(img[0:3], brightness_factor=brightness)
-        img[3:6]   = TF.adjust_brightness(img[3:6], brightness_factor=brightness)
-
-    # Gaussian noise
-    if random.random() > 0.5:
-        img = img + torch.normal(0, 0.05, size=img.shape)
-
-    return img, mask
-
-
-# ─── Loss utilities ───────────────────────────────────────────────────────────
-
-def l1_regularisation(model: nn.Module) -> torch.Tensor:
-    """Sum of absolute values of all Conv2d weight tensors."""
-    reg = torch.tensor(0.0)
-    for module in model.modules():
-        if isinstance(module, nn.Conv2d):
-            reg = reg + torch.sum(torch.abs(module.weight))
-    return reg
-
-
 # ─── Logging helpers ──────────────────────────────────────────────────────────
 
-def make_run_name(cfg: dict, num_patches: int) -> str:
-    p = cfg["patch_size"]
-    return (
-        f"{p}x{p}_{num_patches}"
-        f"_mse_l1_{cfg['lambda_l1']}"
-        f"_l2_{cfg['weight_decay']}"
-        f"_{cfg['perc_data']}data"
-        f"_test_prop_{cfg['test_prop']}"
-        f"_pat{cfg['patience']}"
-        f"_bat{cfg['batch_size']}"
-        f"_adam_lr_{cfg['lr']}"
-    )
-
+def make_run_name(cfg: dict) -> str:
+    run_name = cfg["output_dir"].split('/')[-1]
+    return run_name
 
 def plot_loss(train_losses, val_losses, path: str) -> None:
     fig, ax = plt.subplots()
@@ -230,98 +102,125 @@ def save_loss(train_losses, val_losses, path: str) -> None:
 
 # ─── Training loop ────────────────────────────────────────────────────────────
 
-def train(cfg: dict) -> None:
+def train(cfg: dict, resume_path: str = None) -> None:
     device = get_device()
-    print(f"Using device: {device}")
 
-    # Reproducibility
-    random.seed(cfg["random_seed"])
-    np.random.seed(cfg["random_seed"])
-    torch.manual_seed(cfg["random_seed"])
+    seed = cfg["random_seed"]
+    set_seed(seed)                 # seeds python/numpy/torch RNGs globally, BEFORE
+                                   # anything random happens -- model init, dropout, etc.
+                                   # seed_worker (used inside make_dataloader) is a
+                                   # separate, narrower thing: it only reseeds each
+                                   # DataLoader worker process's RNG for reproducible
+                                   # shuffling/augmentation, and doesn't cover this.
 
     os.makedirs(cfg["output_dir"], exist_ok=True)
 
-    # ── Data ──────────────────────────────────────────────────────────────────
-    X_train, X_val, Y_train, Y_val = load_data(cfg)
-    train_loader, val_loader = make_loaders(
-        X_train, X_val, Y_train, Y_val, cfg["batch_size"]
+    # save config parameters inside run's folder
+    cfg_to_save = {**cfg}
+    with open(f"{cfg['output_dir']}/config.yaml", "w") as f:
+        yaml.dump(cfg_to_save, f)  # save a copy alongside the run's outputs, for reproducibility
+
+    # load data
+    X, Y = load_data(cfg, seed)
+    X_train, X_val, Y_train, Y_val = split_data(X, Y, cfg['val_prop'], seed=seed)
+
+    train_loader, train_dataset = make_dataloader(
+        X_train, Y_train, batch_size=cfg["batch_size"], shuffle=True, seed=seed,
+        augment=cfg.get("augment", False),
     )
-    num_patches = X_train.shape[0] + X_val.shape[0]
+    val_loader, val_dataset = make_dataloader(
+        X_val, Y_val, batch_size=cfg["batch_size"], shuffle=False, seed=seed,
+        augment=False  # for reproducability augment should be false in val
+    )
+
+    num_patches = len(train_dataset) + len(val_dataset)
     run_name    = make_run_name(cfg, num_patches)
     print(f"Run name: {run_name}")
 
     # ── Model ─────────────────────────────────────────────────────────────────
     model = UNet().to(device)
 
-    # ── Optimiser & loss ──────────────────────────────────────────────────────
-    criterion = nn.MSELoss()
+    # ── Optimiser ──────────────────────────────────────────────────────
     optimizer = optim.Adam(
         model.parameters(),
         lr=cfg["lr"],
         weight_decay=cfg["weight_decay"],
     )
 
-    # ── Training state ────────────────────────────────────────────────────────
-    num_epochs   = cfg["num_epochs"]
-    patience     = cfg["patience"]
-    lambda_l1    = cfg["lambda_l1"]
-    batch_size   = cfg["batch_size"]
-    snap_start   = cfg.get("snapshot_start_epoch", 40)
-    snap_interval= cfg.get("snapshot_interval", 10)
-
+    # ── Training state (overwritten below if resuming) ───────────────────────
+    start_epoch  = 0
     best_loss    = float("inf")
     counter      = 0
     train_losses = []
     val_losses   = []
 
-    output       = cfg["output_dir"]
+    if resume_path:
+        print(f"resuming from {resume_path}")
+        ckpt = torch.load(resume_path, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_epoch  = ckpt["epoch"] + 1
+        best_loss    = ckpt.get("best_loss", float("inf"))
+        counter      = ckpt.get("counter", 0)
+        train_losses = ckpt.get("train_losses", [])
+        val_losses   = ckpt.get("val_losses", [])
+        print(f"resuming at epoch {start_epoch}, best_loss so far: {best_loss:.6f}")
+
+    num_epochs    = cfg["num_epochs"]
+    patience      = cfg["patience"]
+    lambda_l1     = cfg["lambda_l1"]
+    snap_start    = cfg.get("snapshot_start_epoch", 40)
+    snap_interval = cfg.get("snapshot_interval", 10)
+
+    output = cfg["output_dir"]
+
+    # ── Per-epoch pass over one loader ────────────────────────────────────────
+    def run_epoch(loader, train: bool) -> float:
+        """
+        Run one full pass over `loader`, either training (train=True: computes
+        gradients and steps the optimizer) or evaluating (train=False: forward
+        pass only). Returns the loss averaged over all batches in the pass.
+        """
+        model.train() if train else model.eval()
+        total_loss, n_batches = 0.0, 0
+
+        for inputs, targets in loader:
+            inputs  = inputs.to(device)
+            targets = targets.to(device)
+
+            if train:
+                optimizer.zero_grad()
+
+            with torch.set_grad_enabled(train):
+                outputs = model(inputs)
+                loss = combined_loss(outputs, targets, model, lambda_l1)
+
+            if train:
+                loss.backward()
+                optimizer.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        return total_loss / n_batches
 
     # ── Epoch loop ────────────────────────────────────────────────────────────
     total_start = time.time()
 
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         epoch_start = time.time()
-        model.train()
 
-        for inputs, targets in train_loader:
-            # (N, H, W, C) → (N, C, H, W)
-            inputs  = inputs.permute(0, 3, 1, 2)
-            targets = targets.permute(0, 3, 1, 2)
+        train_loss = run_epoch(train_loader, train=True)
+        train_losses.append(train_loss)
 
-            for j in range(batch_size):
-                inputs[j], targets[j] = data_augmentation(inputs[j], targets[j])
-
-            inputs  = inputs.to(device)
-            targets = targets.to(device)
-
-            optimizer.zero_grad()
-            outputs = model(inputs)
-
-            loss = criterion(outputs, targets) + lambda_l1 * l1_regularisation(model)
-            loss.backward()
-            optimizer.step()
-
-        train_losses.append(loss.item())
-
-        # ── Validation ────────────────────────────────────────────────────────
-        model.eval()
-        val_loss = 0.0
-
-        with torch.no_grad():
-            for val_inputs, val_targets in val_loader:
-                val_inputs  = val_inputs.permute(0, 3, 1, 2).to(device)
-                val_targets = val_targets.permute(0, 3, 1, 2).to(device)
-                val_outputs = model(val_inputs)
-                val_loss   += criterion(val_outputs, val_targets) + lambda_l1 * l1_regularisation(model)
-
-        val_loss /= len(val_loader)
-        val_losses.append(val_loss.item())
+        val_loss = run_epoch(val_loader, train=False)
+        val_losses.append(val_loss)
 
         epoch_time = time.time() - epoch_start
         print(
             f"Epoch [{epoch+1}/{num_epochs}] "
-            f"Train Loss: {loss.item():.6f} | "
-            f"Val Loss: {val_loss.item():.6f} | "
+            f"Train Loss: {train_loss:.6f} | "
+            f"Val Loss: {val_loss:.6f} | "
             f"Time: {epoch_time:.1f}s"
         )
 
@@ -331,27 +230,42 @@ def train(cfg: dict) -> None:
         save_loss(train_losses, val_losses,
                   os.path.join(output, f"model_displ_xy_segm_{run_name}.txt"))
 
+        # ── Best-model / early-stopping bookkeeping ───────────────────────────
+        is_best = val_loss < best_loss
+        if is_best:
+            best_loss = val_loss
+            counter   = 0
+        else:
+            counter += 1
+
+        # ── One resumable checkpoint, reused for latest/periodic/best ────────
+        checkpoint = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_loss": best_loss,
+            "counter": counter,
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+        }
+
         # ── Save latest checkpoint ────────────────────────────────────────────
-        torch.save(model.state_dict(),
+        torch.save(checkpoint,
                    os.path.join(output, f"latest_model_displ_xy_segm_{run_name}.pt"))
 
         # ── Periodic snapshots ────────────────────────────────────────────────
         if epoch >= snap_start and epoch % snap_interval == 0:
-            torch.save(model.state_dict(),
+            torch.save(checkpoint,
                        os.path.join(output, f"model_epoch_{epoch}_{run_name}.pt"))
 
         # ── Best model & early stopping ───────────────────────────────────────
-        if val_loss < best_loss:
-            best_loss = val_loss
-            counter   = 0
-            torch.save(model.state_dict(),
+        if is_best:
+            torch.save(checkpoint,
                        os.path.join(output, f"displ_xy_segm_best_model_{run_name}.pt"))
-            print(f"  ✓ New best model saved (val_loss={best_loss.item():.6f})")
-        else:
-            counter += 1
-            if counter >= patience:
-                print(f"Early stopping triggered after {epoch+1} epochs.")
-                break
+            print(f"  ✓ New best model saved (val_loss={best_loss:.6f})")
+        elif counter >= patience:
+            print(f"Early stopping triggered after {epoch+1} epochs.")
+            break
 
     print(f"Training complete in {time.time() - total_start:.1f}s")
     print(f"Best validation loss: {best_loss:.6f}")
@@ -365,6 +279,8 @@ def parse_args():
     )
     p.add_argument("--config", default="config.yaml",
                    help="Path to YAML config file (default: config.yaml)")
+    p.add_argument("--resume", type=str, default=None,
+                   help="Path to a checkpoint (e.g. latest_model_..._{run_name}.pt) to resume from")
 
     # Optional overrides for every config key
     p.add_argument("--train_images",  type=str,   default=None)
@@ -372,7 +288,7 @@ def parse_args():
     p.add_argument("--output_dir",    type=str,   default=None)
     p.add_argument("--random_seed",   type=int,   default=None)
     p.add_argument("--perc_data",     type=float, default=None)
-    p.add_argument("--test_prop",     type=float, default=None)
+    p.add_argument("--val_prop",     type=float, default=None)
     p.add_argument("--batch_size",    type=int,   default=None)
     p.add_argument("--num_epochs",    type=int,   default=None)
     p.add_argument("--lr",            type=float, default=None)
@@ -386,7 +302,7 @@ def main():
     args = parse_args()
     cfg  = load_config(args.config)
     cfg  = apply_cli_overrides(cfg, args)
-    train(cfg)
+    train(cfg, resume_path=args.resume)
 
 
 if __name__ == "__main__":
