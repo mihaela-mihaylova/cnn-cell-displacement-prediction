@@ -115,11 +115,6 @@ def train(cfg: dict, resume_path: str = None) -> None:
 
     os.makedirs(cfg["output_dir"], exist_ok=True)
 
-    # save config parameters inside run's folder
-    cfg_to_save = {**cfg}
-    with open(f"{cfg['output_dir']}/config.yaml", "w") as f:
-        yaml.dump(cfg_to_save, f)  # save a copy alongside the run's outputs, for reproducibility
-
     # load data
     X, Y = load_data(cfg, seed)
     X_train, X_val, Y_train, Y_val = split_data(X, Y, cfg['val_prop'], seed=seed)
@@ -134,8 +129,14 @@ def train(cfg: dict, resume_path: str = None) -> None:
     )
 
     num_patches = len(train_dataset) + len(val_dataset)
-    run_name    = make_run_name(cfg, num_patches)
+    run_name    = make_run_name(cfg)
     print(f"Run name: {run_name}")
+
+    # save config parameters inside run's folder
+    cfg_to_save = {**cfg, "num_patches": num_patches}
+    with open(f"{cfg['output_dir']}/config.yaml", "w") as f:
+        yaml.dump(cfg_to_save, f)  # save a copy alongside the run's outputs, for reproducibility
+
 
     # ── Model ─────────────────────────────────────────────────────────────────
     model = UNet().to(device)
