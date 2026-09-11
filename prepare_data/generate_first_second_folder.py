@@ -80,7 +80,7 @@ def copy_images_for_training(input_folder, output_folder, start_id):
 
 def copy_images_for_inference(input_folder, output_folder):
 
-    video_folder_name = input_folder.split('/')[-1]
+    video_folder_name = input_folder.name
     # so that the images are easily associated with the video they came from
     output_folder = os.path.join(output_folder, video_folder_name)
 
@@ -277,6 +277,12 @@ def iterate_over_folder_for_inference(input_folder, output_folder, debug=True):
     print(f'Creating of first and second folder for {input_folder} is done!')
     print(f'First and second folder saved at {output_folder}')
 
+def str2bool(x):
+    if x.lower() in ('true', '1', 'yes'):
+        return True
+    if x.lower() in ('false', '0', 'no'):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value (true/false), got '{x}'")
 
 def main():
     # Set up argument parser for command-line usage
@@ -284,7 +290,8 @@ def main():
     parser.add_argument('input_folder', type=str, help='Path to the input folder containing images.')
     parser.add_argument('output_folder', type=str, help='Path to the output folder containing images.')
 
-    parser.add_argument('for_training', type=str, help='Declare whether the files in the folder are used for training. If true,last frame in the folder is skipped.')
+    parser.add_argument('for_training', type=str2bool,
+                     help='Declare whether the files in the folder are used for training. If true, last frame in the folder is skipped.')
 
     args = parser.parse_args()
     # turn these into paths
