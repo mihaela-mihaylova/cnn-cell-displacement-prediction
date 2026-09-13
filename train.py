@@ -10,27 +10,21 @@ Usage:
 The script reads all hyperparameters from a YAML config file.
 Any value can be overridden from the command line (see --help).
 """
-
-import argparse
 import os
-import random
+import sys
+import argparse
 import time
 
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torchvision.transforms.functional as TF
 import yaml
 from matplotlib import pyplot as plt
-from skimage.io import imread
-from sklearn.model_selection import train_test_split
-import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from unet import UNet
 from utils import set_seed, seed_worker
-from dataset import CellDisplDataset, make_dataloader, load_data, split_data
+from dataset import  make_dataloader, extract_idx, split_data
 from loss import combined_loss
+from pathlib import Path
 
 # ─── Device ───────────────────────────────────────────────────────────────────
 
@@ -76,7 +70,7 @@ def apply_cli_overrides(cfg: dict, args: argparse.Namespace) -> dict:
 # ─── Logging helpers ──────────────────────────────────────────────────────────
 
 def make_run_name(cfg: dict) -> str:
-    run_name = cfg["output_dir"].split('/')[-1]
+    run_name = Path(cfg["output_dir"]).name
     return run_name
 
 def plot_loss(train_losses, val_losses, path: str) -> None:
@@ -116,16 +110,28 @@ def train(cfg: dict, resume_path: str = None) -> None:
     os.makedirs(cfg["output_dir"], exist_ok=True)
 
     # load data
-    X, Y = load_data(cfg, seed)
-    X_train, X_val, Y_train, Y_val = split_data(X, Y, cfg['val_prop'], seed=seed)
+    all_idx_for_train_val = extract_idx(cfg, seed)
+    train_idx, val_idx = split_data(all_idx_for_train_val, cfg['val_prop'], seed=seed)
 
     train_loader, train_dataset = make_dataloader(
-        X_train, Y_train, batch_size=cfg["batch_size"], shuffle=True, seed=seed,
+        list_ids=train_idx,
+        cfg=cfg,
+        batch_size=cfg["batch_size"], 
+        shuffle=True, 
+        seed=seed,
         augment=cfg.get("augment", False),
+        p_v_flip=cfg.get("p_v_flip", 0.5),
+        p_h_flip=cfg.get("p_h_flip", 0.5),
+        p_brightness=cfg.get("p_brightness", 0.5),
+        p_noise=cfg.get("p_noise", 0.5)
     )
     val_loader, val_dataset = make_dataloader(
-        X_val, Y_val, batch_size=cfg["batch_size"], shuffle=False, seed=seed,
-        augment=False  # for reproducability augment should be false in val
+        list_ids=val_idx,
+        cfg=cfg,
+        batch_size=cfg["batch_size"],
+        shuffle=False,
+        seed=seed,
+        augment=False  # for reproducibility augment should be false in val
     )
 
     num_patches = len(train_dataset) + len(val_dataset)

@@ -77,63 +77,82 @@ def data_augmentation(img: torch.Tensor,
 
 # ─── Load data ─────────────────────────────────────────────────────────────
 
-def load_data(cfg: dict, seed: int):
+def extract_idx(cfg: dict, seed: int):
     """
-    Load patch images and masks, apply train/val split.
-
-    Returns (X_train, X_val, Y_train, Y_val).
-    Each X has shape (N, H, W, 6): first + second image stacked on channels.
-    Each Y has shape (N, H, W, 3): [displ_x, displ_y, position_mask].
+    Extract the ids of the files that we use for training, in case perc_data < 1
     """
     train_images = cfg["train_images"]
-    train_masks  = cfg["train_masks"]
-    img_channels = cfg["img_channels"]
-    patch_size   = cfg["patch_size"]
     perc_data    = cfg["perc_data"]
 
     first_folder = os.path.join(train_images, "first")
     file_count   = len([
         f for f in os.listdir(first_folder)
-        if os.path.isfile(os.path.join(first_folder, f))
+        if (os.path.isfile(os.path.join(first_folder, f)) and f.endswith('.jpg'))
     ])
 
     # A local, dedicated generator -- so which patch ids get selected depends
     # only on `seed`, regardless of anything else in the program that uses
     # the shared `random` module.
     rng = random.Random(seed)
+    # This sampling is without replacement.
     ids = rng.sample(range(file_count), round(perc_data * file_count))
     ids.sort()
-    n   = len(ids)
 
-    print(f"Loading {n} patches from {file_count} available ({perc_data:.0%} selected)...")
-    start = time.time()
+    return ids
 
-    X = np.zeros((n, patch_size, patch_size, 2 * img_channels), dtype=np.float32)
-    Y = np.zeros((n, patch_size, patch_size, 3),                 dtype=np.float32)
 
-    for i, idx in enumerate(ids):
-        img      = imread(os.path.join(train_images, "first",  f"{idx}.jpg"))[:, :, :img_channels]
-        next_img = imread(os.path.join(train_images, "second", f"{idx}.jpg"))[:, :, :img_channels]
-        X[i, :, :, :img_channels]   = img      / 255.0
-        X[i, :, :, img_channels:]   = next_img / 255.0
+def load_patch(cfg:dict, idx):
+    """Loads a patch img, corresponding to idx x. 
+    Only works because our image ids start from 0 through N-1.
+    Returns img, next img, pos, x_img, y_img.
+    """
+    train_images = cfg["train_images"]
+    train_masks  = cfg["train_masks"]
+    img_channels = cfg["img_channels"]
 
-        x_img = imread(os.path.join(train_masks, "displ_masks", "displ_x", f"{idx}.png"))
-        y_img = imread(os.path.join(train_masks, "displ_masks", "displ_y", f"{idx}.png"))
-        pos   = imread(os.path.join(train_masks, "pos_masks",               f"{idx}.png"))
+    # img patch
+    img = imread(os.path.join(train_images, "first",  f"{idx}.jpg"))[:, :, :img_channels]
+    next_img = imread(os.path.join(train_images, "second", f"{idx}.jpg"))[:, :, :img_channels]
 
-        # positive channel minus negative channel → signed displacement
-        Y[i, :, :, 0] = np.float32(x_img[:, :, 1]) - np.float32(x_img[:, :, 0])
-        Y[i, :, :, 1] = np.float32(y_img[:, :, 1]) - np.float32(y_img[:, :, 0])
-        # position mask normalised to [0, ~10] range (stored as 0–255 in uint8)
-        Y[i, :, :, 2] = np.float32(pos) / 25.0
+    # mask patch
+    x_img = imread(os.path.join(train_masks, "displ_masks", "displ_x", f"{idx}.png"))
+    y_img = imread(os.path.join(train_masks, "displ_masks", "displ_y", f"{idx}.png"))
+    pos   = imread(os.path.join(train_masks, "pos_masks",               f"{idx}.png"))
 
-    print(f"Loaded {n} patches in {time.time() - start:.1f}s")
+    return img, next_img, pos, x_img, y_img
+
+def normalize_patch(cfg:dict,
+                    img, next_img,
+                    pos, x_img, y_img):
+    """ 
+    Takes in patches - img, next_img (first and second patch), and pos, x_img, y_img (mask patches).
+    Returns X and Y - normalized patches,
+    Each X has shape (N, H, W, 6): first + second image stacked on channels.
+    Each Y has shape (N, H, W, 3): [displ_x, displ_y, position_mask]."""
+    
+    img_channels = cfg["img_channels"]
+    patch_size   = cfg["patch_size"]
+    
+    X = np.zeros((patch_size, patch_size, 2 * img_channels), dtype=np.float32)
+    Y = np.zeros((patch_size, patch_size, 3),                 dtype=np.float32)
+    
+    X[:, :, :img_channels]   = img      / 255.0
+    X[:, :, img_channels:]   = next_img / 255.0
+
+    # positive channel minus negative channel → signed displacement
+    Y[:, :, 0] = np.float32(x_img[:, :, 1]) - np.float32(x_img[:, :, 0])
+    Y[:, :, 1] = np.float32(y_img[:, :, 1]) - np.float32(y_img[:, :, 0])
+    # position mask normalised to [0, ~10] range (stored as 0–255 in uint8)
+    Y[:, :, 2] = np.float32(pos) / 25.0
 
     return X, Y
 
-def split_data(X, Y, val_prop: float, seed: int):
-    """Partition (X, Y) into train/val, explicitly and reproducibly seeded."""
-    return train_test_split(X, Y, test_size=val_prop, random_state=seed)
+
+def split_data(ids, val_prop: float, seed: int):
+    """ Takes in ids drawn in extract_idx.
+    Partitions them into ids for training and val. Explicitly and reproducibly seeded."""
+    train_ids,val_ids = train_test_split(ids, test_size=val_prop, random_state=seed)
+    return train_ids, val_ids
 
 # ─── Dataset ──────────────────────────────────────────────────────────────────
 
@@ -146,7 +165,7 @@ class CellDisplDataset(Dataset):
     __getitem__
     """
 
-    def __init__(self, X: np.ndarray, Y: np.ndarray, augment: bool = False,
+    def __init__(self, list_ids:list, cfg:dict, augment: bool = False,
                  seed: int = None,
                  p_v_flip: float = 0.5, p_h_flip: float = 0.5,
                  p_brightness: float = 0.5, p_noise: float = 0.5,
@@ -166,8 +185,8 @@ class CellDisplDataset(Dataset):
         debug        : if True, print the shape of each sample as it is
                        retrieved.
         """
-        self.X = X
-        self.Y = Y
+        self.list_ids = list_ids
+        self.cfg = cfg
         self.augment = augment
         self.rng = random.Random(seed) if seed is not None else random
         self.p_v_flip = p_v_flip
@@ -178,12 +197,15 @@ class CellDisplDataset(Dataset):
 
     def __len__(self) -> int:
         """Number of samples in the dataset."""
-        return self.X.shape[0]
+        return len(self.list_ids)
 
     def __getitem__(self, idx: int):
         """Return the (image, mask) tensor pair at index idx, augmented if enabled."""
-        img  = torch.from_numpy(self.X[idx]).permute(2, 0, 1)  # (H,W,6) -> (6,H,W)
-        mask = torch.from_numpy(self.Y[idx]).permute(2, 0, 1)  # (H,W,3) -> (3,H,W)
+        patch_id = self.list_ids[idx]
+        first_img, sec_img, pos, x_img, y_img = load_patch(self.cfg, patch_id)
+        X, Y = normalize_patch(self.cfg, first_img, sec_img, pos, x_img, y_img)
+        img  = torch.from_numpy(X).permute(2, 0, 1)  # (H,W,6) -> (6,H,W)
+        mask = torch.from_numpy(Y).permute(2, 0, 1)  # (H,W,3) -> (3,H,W)
 
         if self.augment:
             img, mask = data_augmentation(
@@ -200,7 +222,7 @@ class CellDisplDataset(Dataset):
 
         return img, mask
 
-def make_dataloader(X: np.ndarray, Y: np.ndarray, batch_size: int, shuffle: bool,
+def make_dataloader(list_ids:list, cfg:dict, batch_size: int, shuffle: bool,
                      seed: int, augment: bool = False, p_v_flip: float = 0.5,
                      p_h_flip: float = 0.5, p_brightness: float = 0.5,
                      p_noise: float = 0.5, debug: bool = False):
@@ -215,8 +237,9 @@ def make_dataloader(X: np.ndarray, Y: np.ndarray, batch_size: int, shuffle: bool
     generator.manual_seed(seed)
 
     dataset = CellDisplDataset(
-        X, Y,
+        list_ids = list_ids,
         augment=augment,
+        cfg=cfg,
         seed=seed,
         p_v_flip=p_v_flip,
         p_h_flip=p_h_flip,
