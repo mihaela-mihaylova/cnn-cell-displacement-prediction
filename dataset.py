@@ -178,17 +178,19 @@ class CellDisplDataset(Dataset):
         """
         Parameters
         ----------
-        X, Y         : input arrays
+        list_ids     : patch ids belonging to this split (train or val), as
+                    produced by extract_idx() / split_data().
+        cfg          : the run's config dict (paths, img_channels, patch_size, ...).
         augment      : whether to apply data_augmentation() in __getitem__.
         seed         : if given, augmentation draws from a private generator
-                       seeded with this value, independent of anything else
-                       in the program that uses the `random` module. If not
-                       given, augmentation falls back to that shared module.
+                    seeded with this value, independent of anything else
+                    in the program that uses the `random` module. If not
+                    given, augmentation falls back to that shared module.
         p_v_flip, p_h_flip, p_brightness, p_noise :
-                       per-transform probabilities, forwarded to
-                       data_augmentation().
+                    per-transform probabilities, forwarded to
+                    data_augmentation().
         debug        : if True, print the shape of each sample as it is
-                       retrieved.
+                    retrieved.
         """
         self.list_ids = list_ids
         self.cfg = cfg
