@@ -1,5 +1,5 @@
 """
-segment_with_our_nn_and_predict_xy_displ.py
+predict.py
 
 Runs the trained UNet on a video to predict nucleus positions and XY displacement.
 
