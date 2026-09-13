@@ -62,7 +62,19 @@ PATCHES_STAGE_DIR   := $(MODEL_DATA_DIR)/.staging_$(SPLIT)
 
 PREDICT_RAW_FRAMES_DIR   := $(RAW_DIR)/raw_frames/$(PREDICT_SPLIT)
 PREDICT_FIRST_SECOND_DIR := $(INTERMEDIATE_DIR)/$(PREDICT_SPLIT)/first_second
+# generate_first_second_folder.py's inference mode nests one extra level, named
+# after the input folder's own basename -- this is the actual first/second
+# folder that ends up containing first/ and second/, and what predict.py needs.
+PREDICT_VIDEO_DIR        := $(PREDICT_FIRST_SECOND_DIR)/$(notdir $(PREDICT_RAW_FRAMES_DIR))
 PREDICT_OUTPUT_DIR       ?= data/predictions
+
+# ─── Prediction options ────────────────────────────────────────────────────────
+MODEL_PATH        ?=
+RADIUS            ?= 2
+DETECTIONS_CSV    ?=
+SAVE_QC           ?=
+QC_OUTPUT_DIR     ?=
+
 
 # ─── Image / patch parameters ─────────────────────────────────────────────────
 IMG_HEIGHT        := 1104
@@ -237,28 +249,31 @@ train:
 predict_first_second:
 	@echo "\n>>> Building first/second frame pairs for '$(PREDICT_SPLIT)'..."
 	@if ls $(PREDICT_RAW_FRAMES_DIR)/*.$(IMG_FORMAT) >/dev/null 2>&1; then \
-		mkdir -p $(PREDICT_FIRST_SECOND_DIR) ; \
-		cp $(PREDICT_RAW_FRAMES_DIR)/*.$(IMG_FORMAT) $(PREDICT_FIRST_SECOND_DIR)/ ; \
-		$(PYTHON) predict/generate_first_second_folder.py $(PREDICT_FIRST_SECOND_DIR) ; \
+		$(PYTHON) prepare_data/generate_first_second_folder.py \
+			$(PREDICT_RAW_FRAMES_DIR) $(PREDICT_FIRST_SECOND_DIR) False ; \
 	else \
 		echo "No .$(IMG_FORMAT) frames found in $(PREDICT_RAW_FRAMES_DIR) — skipping." ; \
 	fi
 
 predict: predict_first_second
 	@if [ -z "$(MODEL_PATH)" ]; then \
-		echo "No trained model found (no displ_xy_segm_best_model_*.pt here yet)." >&2; \
-		echo "Run 'make train' first, or pass one explicitly: make predict MODEL_PATH=path/to/best_model.pt" >&2; \
+		echo "No trained model path given." >&2; \
+		echo "Run 'make train' first, then: make predict MODEL_PATH=path/to/best_model.pt" >&2; \
 		exit 1; \
 	fi
 	@echo "\n>>> Running prediction on '$(PREDICT_SPLIT)'..."
 	@mkdir -p $(PREDICT_OUTPUT_DIR)
-	$(PYTHON) predict/segment_with_our_nn_and_predict_xy_displ.py \
-		$(PREDICT_FIRST_SECOND_DIR) \
+	$(PYTHON) predict.py \
+		$(PREDICT_VIDEO_DIR) \
 		$(PREDICT_OUTPUT_DIR) \
 		--model_path $(MODEL_PATH) \
 		--img_height $(IMG_HEIGHT) \
 		--img_width  $(IMG_WIDTH) \
-		--patch_size $(PATCH_SIZE)
+		--patch_size $(PATCH_SIZE) \
+		--radius     $(RADIUS) \
+		$(if $(DETECTIONS_CSV),--detections_csv $(DETECTIONS_CSV)) \
+		$(if $(SAVE_QC),--save_qc) \
+		$(if $(QC_OUTPUT_DIR),--qc_output_dir $(QC_OUTPUT_DIR))
 
 # ─── Clean generated data (keeps raw CSVs, raw frames, and model weights) ──────
 clean:
