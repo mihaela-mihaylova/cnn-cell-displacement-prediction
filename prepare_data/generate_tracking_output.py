@@ -12,18 +12,23 @@ Displacement encoding (same convention used everywhere in this pipeline):
 
 Usage:
     python generate_tracking_output.py \\
-        --csv            /path/to/tracking.csv \\
+        --path_to_csv            /path/to/tracking.csv \\
         --output_dir     /path/to/output \\
         --img_height     1104 \\
         --img_width      1376 \\
+        --for_training
 
 Arguments:
-    --csv            Path to tracking CSV.
+    --path_to_csv    Path to tracking CSV.
                      Required columns: tframe, y, x, track, displ_y, displ_x
     --output_dir     Root folder where pos_masks/, displ_masks/displ_x/,
                      and displ_masks/displ_y/ will be created.
     --img_height     Height of the training images in pixels (default: 1104).
     --img_width      Width of the training images in pixels (default: 1376).
+    --for_training   If given, skip the last frame of each video when
+                     generating masks (there's no future frame to measure
+                     displacement to). Omit for inference-style output that
+                     keeps every frame.
 """
 
 import argparse
@@ -44,7 +49,7 @@ def generate_masks(df, output_dir, img_height, img_width, first_frame_id=0, for_
     max_y = max(df["y"].values)
     if max_x >= img_width or max_y >= img_height:
         print(
-            f"Warning: some coordinates exceed image dimensions after applying "
+            f"Warning: some coordinates exceed image dimensions. "
             f"Check that --img_height/--img_width are correct."
         )
 
@@ -115,7 +120,7 @@ def main():
                         help="Image height in pixels (default: 1104).")
     parser.add_argument("--img_width", type=int, default=1376,
                         help="Image width in pixels (default: 1376).")
-    parser.add_argument("--for_training", action="store_true", default=True,
+    parser.add_argument("--for_training", action="store_true",
                         help="Skip the last frame of each video (default: True).")
 
     args = parser.parse_args()
@@ -149,7 +154,7 @@ def main():
                        img_height=img_height,
                        img_width=img_width,
                        first_frame_id=init_frame_id_video,
-                       for_training=True)
+                       for_training=for_training)
 
         # allocate the smallest frame id for the following video
         # allocate the smallest frame id for the following video

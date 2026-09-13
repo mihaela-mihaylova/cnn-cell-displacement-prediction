@@ -23,7 +23,7 @@
 #   data/model_data/<split>/output/{pos_masks,displ_masks}  — final training patches (generated)
 #
 # SPLIT drives the labelled pipeline (merge_csv → generate_masks → first_second →
-# pad_images → split_patches → train); it needs a raw_csv_files/<split> folder with.
+# pad_images → split_patches → train); it needs a raw_csv_files/<split> folder with CSVs.
 #
 # Configure the variables below (or override on the command line, e.g.
 # `make prepare_data SPLIT=val`) before running.
@@ -46,8 +46,6 @@ RAW_FRAMES_DIR    := $(RAW_DIR)/raw_frames/$(SPLIT)
 INTERMEDIATE_DIR  := data/intermediate
 SPLIT_CSV         := $(INTERMEDIATE_DIR)/$(SPLIT).csv
 FIRST_SECOND_DIR  := $(INTERMEDIATE_DIR)/$(SPLIT)/first_second
-# generate_tracking_output.py appends a subfolder named after the CSV (i.e. SPLIT)
-# onto whatever --output_dir it's given, so MASKS_PARENT_DIR is what gets passed in.
 MASKS_PARENT_DIR  := $(INTERMEDIATE_DIR)/$(SPLIT)/masks
 MASKS_DIR         := $(MASKS_PARENT_DIR)
 PADDED_DIR        := $(INTERMEDIATE_DIR)/$(SPLIT)/padded
@@ -82,7 +80,7 @@ help:
 	@echo "Targets: prepare_data, prepare_data_all, merge_csv, generate_masks, first_second,"
 	@echo "         first_second_all, pad_images, split_patches, train, predict_first_second,"
 	@echo "         all, clean"
-	@echo "Key variables: SPLIT=$(SPLIT) PREDICT_SPLIT=$(PREDICT_SPLIT) ALL_SPLITS=$(ALL_SPLITS) MODEL_PATH=$(MODEL_PATH)"
+	@echo "Key variables: SPLIT=$(SPLIT) PREDICT_SPLIT=$(PREDICT_SPLIT) ALL_SPLITS=$(ALL_SPLITS)"
 
 all: prepare_data train
 
@@ -124,7 +122,8 @@ generate_masks:
 			--path_to_csv $(SPLIT_CSV) \
 			--output_dir  $(MASKS_PARENT_DIR) \
 			--img_height  $(IMG_HEIGHT) \
-			--img_width   $(IMG_WIDTH) ; \
+			--img_width   $(IMG_WIDTH) \
+			--for_training ; \
 	else \
 		echo "No merged CSV at $(SPLIT_CSV) — skipping." ; \
 	fi
@@ -133,10 +132,9 @@ generate_masks:
 # Skips if raw_frames/<SPLIT> has no frames yet.
 first_second:
 	@echo "\n>>> Step 3/5: Building first/second frame pairs for '$(SPLIT)'..."
-	@if ls $(RAW_FRAMES_DIR)/*.$(IMG_FORMAT) >/dev/null 2>&1; then \
-		mkdir -p $(FIRST_SECOND_DIR) ; \
-		cp $(RAW_FRAMES_DIR)/*.$(IMG_FORMAT) $(FIRST_SECOND_DIR)/ ; \
-		$(PYTHON) prepare_data/generate_first_second_folder.py $(FIRST_SECOND_DIR) ; \
+		@if find $(RAW_FRAMES_DIR) -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then \
+		$(PYTHON) prepare_data/generate_first_second_folder.py \
+			$(RAW_FRAMES_DIR) $(FIRST_SECOND_DIR) True ; \
 	else \
 		echo "No .$(IMG_FORMAT) frames found in $(RAW_FRAMES_DIR) — skipping." ; \
 	fi

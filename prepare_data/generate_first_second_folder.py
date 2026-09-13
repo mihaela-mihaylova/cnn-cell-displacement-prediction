@@ -9,7 +9,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-'TO RUN: python generate_first_second_folder.py /path/to/input_folder'
+'TO RUN: python generate_first_second_folder.py /path/to/input_folder /path/to/output_folder True|False'
 def find_smallest_k(folder):
     files = os.listdir(folder)
     numbers = []
@@ -232,31 +232,11 @@ def iterate_over_folder_for_training(input_folder, output_folder, debug=True):
             start_id = last_id_video + 1
 
     final_frame_count = start_id  # total number of frames written across all videos
- 
-    run_metadata = {
-        'completed_at': datetime.now().isoformat(timespec='seconds'),
-        'input_folder': str(input_folder),
-        'output_folder': str(output_folder),
-        'num_videos_processed': len(subfolders),
-        'videos_processed': [f.name for f in subfolders],
-        'final_frame_count': final_frame_count,
-        'videos': metadata,
-    }
- 
-    metadata_path = output_folder / 'metadata.json'
-    with open(metadata_path, 'w') as f:
-        json.dump(run_metadata, f, indent=2)
- 
-    csv_path = output_folder / 'video_frame_ranges.csv'
-    with open(csv_path, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['video_id', 'first_id_video', 'last_id_video'])
-        writer.writeheader()
-        writer.writerows(csv_rows)
 
-    save_metadata(input_folder, output_folder, subfolders, final_frame_count, metadata,csv_rows)
+    save_metadata(input_folder, output_folder, subfolders, final_frame_count, metadata, csv_rows)
     print(f'Creation of first and second folder for {input_folder} is done!')
     print(f'First and second folder saved at {output_folder}')
-    
+
 def iterate_over_folder_for_inference(input_folder, output_folder, debug=True):
     if debug:
         print('For inference...')
