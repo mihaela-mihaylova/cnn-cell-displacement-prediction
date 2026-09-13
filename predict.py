@@ -69,7 +69,8 @@ def predict_displacement(test_images,
                          model_path,
                          img_height=1104,
                          img_width=1376,
-                         patch_size=128):
+                         patch_size=128,
+                         radius=2):
 
     device = get_device()
     print(f"Using device: {device}")
@@ -170,9 +171,8 @@ def predict_displacement(test_images,
         for c in blobs:
             y       = int(c[0])
             x       = int(c[1])
-            r       = int(c[2])
-            displ_x = average_pixel_value(y, x, r, displ_x_image)
-            displ_y = average_pixel_value(y, x, r, displ_y_image)
+            displ_x = average_pixel_value(y, x, radius, displ_x_image)
+            displ_y = average_pixel_value(y, x, radius, displ_y_image)
             all_points.append((n, y, x, displ_y, displ_x))
 
     df = pd.DataFrame(all_points, columns=["tframe", "y", "x", "displ_y", "displ_x"])
@@ -198,6 +198,8 @@ def main():
     parser.add_argument("--patch_size", type=int, default=128,
                         help="Patch size used during training (default: 128). "
                              "Padding is calculated automatically from this.")
+    parser.add_argument("--radius", type=int, default=2,
+                            help="Radius for the blob used to calculate the displacement.")
     args = parser.parse_args()
 
     os.makedirs(args.output_path, exist_ok=True)
@@ -209,6 +211,7 @@ def main():
         img_height  = args.img_height,
         img_width   = args.img_width,
         patch_size  = args.patch_size,
+        radius = args.radius
     )
 
 
