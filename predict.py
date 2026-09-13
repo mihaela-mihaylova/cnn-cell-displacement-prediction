@@ -19,18 +19,12 @@ Padding is calculated automatically from img_height, img_width, and patch_size.
 
 import math
 import os
-
 import numpy as np
 import pandas as pd
 import torch
 from argparse import ArgumentParser
 from skimage import feature
 from skimage.io import imread
-
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-
 from unet import UNet
 from helper_functions import average_pixel_value
 
