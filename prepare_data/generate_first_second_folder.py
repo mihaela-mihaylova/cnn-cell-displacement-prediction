@@ -109,7 +109,7 @@ def copy_images_for_inference(input_folder, output_folder):
         print('Respective match check is OK.')
         #print(f"Images successfully copied to '{first_folder}' and '{second_folder}'.")
     else:
-        ValueError('Check for image matching did not pass. Images in first and second folder are not compatible.')
+        raise ValueError('Check for image matching did not pass. Images in first and second folder are not compatible.')
 
 def verify_image_copies(first_folder, second_folder, num_images, format, smallest_id, for_training=True):
     """
@@ -198,7 +198,7 @@ def iterate_over_folder_for_training(input_folder, output_folder, debug=True):
     has_subdirs = any(item.is_dir() for item in input_folder.iterdir())
 
     if not has_subdirs:
-        ValueError('This is not a nested folder.')
+        raise ValueError('This is not a nested folder.')
     else:
         # sort subfolders
         subfolders = sorted(
