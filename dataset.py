@@ -1,11 +1,16 @@
 """
-dataset.py – PyTorch Dataset for paired (first, second) image patches and
-their displacement / position masks.
+dataset.py - Data pipeline for cell-tracking patches: paired (first, second)
+image frames and their displacement/position targets.
 
-Wraps the numpy arrays produced by train.load_data() (X: image patches,
-Y: displacement/position masks) and applies the same augmentations as
-train.data_augmentation, performed per-sample in __getitem__ rather than
-on the assembled batch.
+Patches are identified by integer ids assigned during data preparation
+(0, 1, ..., N-1). extract_idx() selects which ids are used for a given
+config, optionally subsampling via perc_data; split_data() partitions
+those ids into train and validation sets. CellDisplDataset reads and
+normalizes each patch's image and mask files from disk lazily, one
+sample at a time, in __getitem__, rather than loading the full dataset
+into memory upfront, and applies data_augmentation() to the training
+split. make_dataloader() constructs a CellDisplDataset and wraps it in
+a PyTorch DataLoader with reproducible shuffling.
 """
 import random
 import numpy as np
