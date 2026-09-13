@@ -10,9 +10,11 @@
 #
 # Data layout expected under data/ (already scaffolded in this repo):
 #   data/raw/raw_csv_files/<split>/*.csv                    — one CSV per tracked video (you provide)
-#   data/raw/raw_frames/<split>/*.jpg                       — raw video frames, numbered 0.jpg, 1.jpg, ...
-#                                                              matching the video order in the merged CSV
-#                                                              (you provide)
+#   data/raw/raw_frames/<split>/<video>/*.jpg               — one subfolder per video, each locally
+#                                                              0-indexed (0.jpg, 1.jpg, ...); subfolder
+#                                                              names must share the matching CSV's leading
+#                                                              "<n>_" prefix (e.g. "1_...") so videos line
+#                                                              up across steps (you provide)
 #   data/intermediate/<split>.csv             — merged CSV (generated)
 #   data/intermediate/<split>/first_second//{first,second}/  — consecutive frame pairs (generated)
 #   data/intermediate/<split>/masks/                        — position + displacement masks (generated)
