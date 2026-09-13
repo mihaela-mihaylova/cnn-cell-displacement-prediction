@@ -4,7 +4,7 @@
 # Usage:
 #   make prepare_data   — run all data-preparation steps for SPLIT, in order
 #   make train          — train the model on SPLIT's patches
-#   make predict        — run first/second split + inference on PREDICT_SPLIT
+#   make predict_first_second — build first/second pairs for PREDICT_SPLIT
 #   make all            — prepare data + train
 #   make clean          — remove generated (derived) data for SPLIT/PREDICT_SPLIT
 #
@@ -21,9 +21,7 @@
 #   data/model_data/<split>/output/{pos_masks,displ_masks}  — final training patches (generated)
 #
 # SPLIT drives the labelled pipeline (merge_csv → generate_masks → first_second →
-# pad_images → split_patches → train); it needs a raw_csv_files/<split> folder with
-# CSVs. PREDICT_SPLIT drives inference only (first_second → predict) and needs no CSV
-# — just raw frames in data/raw/raw_frames/<PREDICT_SPLIT>/.
+# pad_images → split_patches → train); it needs a raw_csv_files/<split> folder with.
 #
 # Configure the variables below (or override on the command line, e.g.
 # `make prepare_data SPLIT=val`) before running.
@@ -62,19 +60,6 @@ PATCHES_STAGE_DIR   := $(MODEL_DATA_DIR)/.staging_$(SPLIT)
 
 PREDICT_RAW_FRAMES_DIR   := $(RAW_DIR)/raw_frames/$(PREDICT_SPLIT)
 PREDICT_FIRST_SECOND_DIR := $(INTERMEDIATE_DIR)/$(PREDICT_SPLIT)/first_second
-# generate_first_second_folder.py's inference mode nests one extra level, named
-# after the input folder's own basename -- this is the actual first/second
-# folder that ends up containing first/ and second/, and what predict.py needs.
-PREDICT_VIDEO_DIR        := $(PREDICT_FIRST_SECOND_DIR)/$(notdir $(PREDICT_RAW_FRAMES_DIR))
-PREDICT_OUTPUT_DIR       ?= data/predictions
-
-# ─── Prediction options ────────────────────────────────────────────────────────
-MODEL_PATH        ?=
-RADIUS            ?= 2
-DETECTIONS_CSV    ?=
-SAVE_QC           ?=
-QC_OUTPUT_DIR     ?=
-
 
 # ─── Image / patch parameters ─────────────────────────────────────────────────
 IMG_HEIGHT        := 1104
@@ -85,21 +70,16 @@ IMG_FORMAT        := jpg
 
 # ─── Training config ──────────────────────────────────────────────────────────
 CONFIG            := config.yaml
-
-# ─── Prediction config ─────────────────────────────────────────────────────────
-# train.py saves the best checkpoint as displ_xy_segm_best_model_<run_name>.pt in
-# its config output_dir ("." by default).
-
 # =============================================================================
 
 .PHONY: all prepare_data prepare_data_all merge_csv generate_masks first_second \
         first_second_all pad_images split_patches train predict_first_second \
-        predict clean help
+        clean help
 
 help:
 	@echo "Targets: prepare_data, prepare_data_all, merge_csv, generate_masks, first_second,"
 	@echo "         first_second_all, pad_images, split_patches, train, predict_first_second,"
-	@echo "         predict, all, clean"
+	@echo "         all, clean"
 	@echo "Key variables: SPLIT=$(SPLIT) PREDICT_SPLIT=$(PREDICT_SPLIT) ALL_SPLITS=$(ALL_SPLITS) MODEL_PATH=$(MODEL_PATH)"
 
 all: prepare_data train
@@ -244,7 +224,7 @@ train:
 		--train_images $(PATCHES_INPUT_DIR) \
 		--train_masks  $(PATCHES_OUTPUT_DIR)
 
-# ─── Predict ────────────────────────────────────────────────────────────────────
+# ─── Build first/second pairs for prediction (run predict.py directly afterward) ──
 # Skips if raw_frames/<PREDICT_SPLIT> has no frames yet.
 predict_first_second:
 	@echo "\n>>> Building first/second frame pairs for '$(PREDICT_SPLIT)'..."
@@ -254,26 +234,6 @@ predict_first_second:
 	else \
 		echo "No .$(IMG_FORMAT) frames found in $(PREDICT_RAW_FRAMES_DIR) — skipping." ; \
 	fi
-
-predict: predict_first_second
-	@if [ -z "$(MODEL_PATH)" ]; then \
-		echo "No trained model path given." >&2; \
-		echo "Run 'make train' first, then: make predict MODEL_PATH=path/to/best_model.pt" >&2; \
-		exit 1; \
-	fi
-	@echo "\n>>> Running prediction on '$(PREDICT_SPLIT)'..."
-	@mkdir -p $(PREDICT_OUTPUT_DIR)
-	$(PYTHON) predict.py \
-		$(PREDICT_VIDEO_DIR) \
-		$(PREDICT_OUTPUT_DIR) \
-		--model_path $(MODEL_PATH) \
-		--img_height $(IMG_HEIGHT) \
-		--img_width  $(IMG_WIDTH) \
-		--patch_size $(PATCH_SIZE) \
-		--radius     $(RADIUS) \
-		$(if $(DETECTIONS_CSV),--detections_csv $(DETECTIONS_CSV)) \
-		$(if $(SAVE_QC),--save_qc) \
-		$(if $(QC_OUTPUT_DIR),--qc_output_dir $(QC_OUTPUT_DIR))
 
 # ─── Clean generated data (keeps raw CSVs, raw frames, and model weights) ──────
 clean:
