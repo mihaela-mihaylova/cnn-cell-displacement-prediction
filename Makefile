@@ -4,9 +4,8 @@
 # Usage:
 #   make prepare_data   — run all data-preparation steps for SPLIT, in order
 #   make train          — train the model on SPLIT's patches
-#   make predict_first_second — build first/second pairs for PREDICT_SPLIT
 #   make all            — prepare data + train
-#   make clean          — remove generated (derived) data for SPLIT/PREDICT_SPLIT
+#   make clean          — remove generated (derived) data for SPLIT
 #
 # Data layout expected under data/ (already scaffolded in this repo):
 #   data/raw/raw_csv_files/<split>/*.csv                    — one CSV per tracked video (you provide)
@@ -35,10 +34,9 @@ PYTHON ?= python3
 # NOTE: keep these assignments free of trailing inline comments — GNU Make bakes
 # any whitespace before a same-line "#" into the variable's value.
 SPLIT         ?= train
-PREDICT_SPLIT ?= test
 ALL_SPLITS    ?= train val test
 
-# ─── Paths (derived from SPLIT / PREDICT_SPLIT) ───────────────────────────────
+# ─── Paths (derived from SPLIT ───────────────────────────────
 RAW_DIR           := data/raw
 RAW_CSV_DIR       := $(RAW_DIR)/raw_csv_files/$(SPLIT)
 RAW_FRAMES_DIR    := $(RAW_DIR)/raw_frames/$(SPLIT)
@@ -58,9 +56,6 @@ PATCHES_INPUT_DIR   := $(MODEL_DATA_DIR)/$(SPLIT)/input
 PATCHES_OUTPUT_DIR  := $(MODEL_DATA_DIR)/$(SPLIT)/output/
 PATCHES_STAGE_DIR   := $(MODEL_DATA_DIR)/.staging_$(SPLIT)
 
-PREDICT_RAW_FRAMES_DIR   := $(RAW_DIR)/raw_frames/$(PREDICT_SPLIT)
-PREDICT_FIRST_SECOND_DIR := $(INTERMEDIATE_DIR)/$(PREDICT_SPLIT)/first_second
-
 # ─── Image / patch parameters ─────────────────────────────────────────────────
 IMG_HEIGHT        := 1104
 IMG_WIDTH         := 1376
@@ -73,14 +68,14 @@ CONFIG            := config.yaml
 # =============================================================================
 
 .PHONY: all prepare_data prepare_data_all merge_csv generate_masks first_second \
-        first_second_all pad_images split_patches train predict_first_second \
+        first_second_all pad_images split_patches train \
         clean help
 
 help:
 	@echo "Targets: prepare_data, prepare_data_all, merge_csv, generate_masks, first_second,"
-	@echo "         first_second_all, pad_images, split_patches, train, predict_first_second,"
+	@echo "         first_second_all, pad_images, split_patches, train"
 	@echo "         all, clean"
-	@echo "Key variables: SPLIT=$(SPLIT) PREDICT_SPLIT=$(PREDICT_SPLIT) ALL_SPLITS=$(ALL_SPLITS)"
+	@echo "Key variables: SPLIT=$(SPLIT) ALL_SPLITS=$(ALL_SPLITS)"
 
 all: prepare_data train
 
@@ -224,20 +219,9 @@ train:
 		--train_images $(PATCHES_INPUT_DIR) \
 		--train_masks  $(PATCHES_OUTPUT_DIR)
 
-# ─── Build first/second pairs for prediction (run predict.py directly afterward) ──
-# Skips if raw_frames/<PREDICT_SPLIT> has no frames yet.
-predict_first_second:
-	@echo "\n>>> Building first/second frame pairs for '$(PREDICT_SPLIT)'..."
-	@if ls $(PREDICT_RAW_FRAMES_DIR)/*.$(IMG_FORMAT) >/dev/null 2>&1; then \
-		$(PYTHON) prepare_data/generate_first_second_folder.py \
-			$(PREDICT_RAW_FRAMES_DIR) $(PREDICT_FIRST_SECOND_DIR) False ; \
-	else \
-		echo "No .$(IMG_FORMAT) frames found in $(PREDICT_RAW_FRAMES_DIR) — skipping." ; \
-	fi
-
 # ─── Clean generated data (keeps raw CSVs, raw frames, and model weights) ──────
 clean:
-	@echo "Removing generated data for split '$(SPLIT)' and predict split '$(PREDICT_SPLIT)'..."
+	@echo "Removing generated data for split '$(SPLIT)'..."
 	rm -rf $(SPLIT_CSV) $(FIRST_SECOND_DIR) $(MASKS_DIR) $(PADDED_DIR) \
 	       $(PATCHES_INPUT_DIR) $(PATCHES_OUTPUT_DIR) $(PATCHES_STAGE_DIR) \
-	       $(MODEL_DATA_DIR)/patch_record_$(SPLIT).csv $(PREDICT_FIRST_SECOND_DIR)
+	       $(MODEL_DATA_DIR)/patch_record_$(SPLIT).csv
