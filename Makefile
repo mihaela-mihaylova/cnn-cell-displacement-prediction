@@ -36,7 +36,7 @@ PYTHON ?= python3
 SPLIT         ?= train
 ALL_SPLITS    ?= train val test
 
-# ─── Paths (derived from SPLIT ───────────────────────────────
+# ─── Paths (derived from SPLIT) ────────────────────────────────
 RAW_DIR           := data/raw
 RAW_CSV_DIR       := $(RAW_DIR)/raw_csv_files/$(SPLIT)
 RAW_FRAMES_DIR    := $(RAW_DIR)/raw_frames/$(SPLIT)
@@ -82,9 +82,8 @@ all: prepare_data train
 # ─── Full data preparation (runs steps 1-5 in order, for SPLIT) ───────────────
 prepare_data: merge_csv generate_masks first_second pad_images split_patches
 
-# ─── Same as prepare_data, but looped over ALL_SPLITS (train val test by default) ─
-# Each step still skips cleanly per split if that split has no raw data yet (e.g.
-# 'test' has no CSVs, so it'll only get as far as first/second frames — expected).
+# Each step still skips cleanly per split if that split has no raw data yet -- e.g.
+# if you haven't populated a given split's raw_csv_files/ or raw_frames/ yet.
 prepare_data_all:
 	@for s in $(ALL_SPLITS); do \
 		$(MAKE) --no-print-directory prepare_data SPLIT=$$s ; \
