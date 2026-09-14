@@ -191,20 +191,13 @@ pad_images:
 split_patches:
 	@echo "\n>>> Step 5/5: Splitting into patches..."
 	@if [ -d $(PADDED_DIR)/padded_first ]; then \
-		rm -rf $(PATCHES_STAGE_DIR) ; \
 		$(PYTHON) prepare_data/split_images_to_patches.py \
 			--input_dir    $(PADDED_DIR) \
-			--output_dir   $(PATCHES_STAGE_DIR) \
+			--output_dir   $(MODEL_DATA_DIR)/$(SPLIT) \
 			--img_height   $(IMG_HEIGHT) \
 			--img_width    $(IMG_WIDTH) \
 			--patch_size   $(PATCH_SIZE) \
 			--img_channels $(IMG_CHANNELS) ; \
-		mkdir -p $(MODEL_DATA_DIR)/input $(MODEL_DATA_DIR)/output ; \
-		rm -rf $(PATCHES_INPUT_DIR) $(PATCHES_OUTPUT_DIR) ; \
-		mv $(PATCHES_STAGE_DIR)/input  $(PATCHES_INPUT_DIR) ; \
-		mv $(PATCHES_STAGE_DIR)/output $(PATCHES_OUTPUT_DIR) ; \
-		mv $(PATCHES_STAGE_DIR)/patch_record.csv $(MODEL_DATA_DIR)/patch_record_$(SPLIT).csv ; \
-		rm -rf $(PATCHES_STAGE_DIR) ; \
 	else \
 		echo "No padded frames found for '$(SPLIT)' — skipping patch splitting." ; \
 	fi
