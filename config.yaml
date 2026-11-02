@@ -1,6 +1,6 @@
 # ─── Paths ────────────────────────────────────────────────────────────────────
-train_images: "/Users/mmihaylova/Documents/GitHub/cnn-cell-displacement-prediction/data/model_data/train/input"
-train_masks:  "/Users/mmihaylova/Documents/GitHub/cnn-cell-displacement-prediction/data/model_data/train/output"
+train_images: "../cnn-cell-displacement-prediction/data/model_data/train/input"
+train_masks:  "../cnn-cell-displacement-prediction/data/model_data/train/output"
 output_dir:   "./runs/exp1"          # where models, loss plots, and logs are saved
 
 # ─── Data ─────────────────────────────────────────────────────────────────────
